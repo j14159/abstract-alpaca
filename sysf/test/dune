@@ -1,0 +1,5 @@
+(tests
+ (names base_test)
+ (libraries sysf ounit2)
+ (preprocess (pps ppx_deriving.show))
+)

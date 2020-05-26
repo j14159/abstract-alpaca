@@ -1,0 +1,4 @@
+(library
+ (name sysf)
+ (preprocess (pps ppx_deriving.show))
+)
