@@ -16,28 +16,41 @@ type label = string node
 and type_constructor = label * type_expr node list
 
 and type_expr =
-  | Wildcard
   | TE_Unit
-  | TE_Int
   | TE_Bool
   | TE_Arrow of type_expr node * type_expr node
   | Var of string
   | Lab of label
   (* e.g. `type list 'x` *)
-  | Constructor of type_constructor
+  | TE_Apply of label * type_expr node list
+  | TDot of type_expr node * label
   | Variants of (string node * type_expr node) list
+  | Signature of decl list
 
-type declaration =
-  (* An abstract type declaration may not have an associated definition. *)
-  | Type_bind of type_constructor * type_expr node option
+(* Elements of a signature type declaration (a structure type to a module's
+   structure expression).
+ *)
+and decl =
+  | Opaque_type of type_constructor
+  | Transparent_type of type_constructor * type_expr node
   | Val_bind of label * type_expr node
 
-and term =
+type term =
   | Unit
+  | Label of label
   | Variant of label * term node
   | Fun of term node * term node
+  (* Field access, could be for a module, signature, or record:  *)
+  | Dot of term node * label
+  | Mod of bind list
+  | Pack of term node * term node
 
-type expr =
+(* Elements of a module expression (structure literal/expression).  *)
+and bind =
+  | Type_decl of type_constructor * type_expr node
+  | Let_bind of label * expr node
+
+and expr =
   | Term of term node
   (* Allows for annotation with variants, not good:  *)
   | Ann_term of (term * type_expr) node
@@ -48,9 +61,7 @@ type expr =
  *)
 let rec check_type_expr e =
   match e with
-  | { n = Wildcard; _ } ->
-     Result.ok ()
-  | {n = TE_Unit; _ } | { n = TE_Int; _ } | { n = TE_Bool; _ } ->
+  | {n = TE_Unit; _ } | { n = TE_Bool; _ } ->
      Result.ok ()
   | { n = TE_Arrow ({n = Variants _; _ }, _); pos }
     | { n = TE_Arrow (_, {n = Variants _; _ }); pos } ->
@@ -61,23 +72,33 @@ let rec check_type_expr e =
      Result.ok ()
   | { n = Lab _; _ } ->
      Result.ok ()
-  | { n = Constructor (_, args); _ } ->
-     (* TODO:  check for dupe variables.  *)
-     check_list args
+  | { n = TE_Apply (_, exprs); _ } ->
+     check_list exprs
   | { n = Variants xs; _ } ->
      let f prev (_, next) = Result.bind prev (fun _ -> check_type_expr next) in
      List.fold_left f (Result.ok ()) xs
-and check_declaration d =
+  | { n = TDot ({ n = Signature _; _ }, _); _ } | { n = TDot ({ n = Lab _; _ }, _); _ } ->
+     Result.ok ()
+  | { n = TDot _; pos } ->
+     Result.error (pos, "Field access type expressions only permitted on labels and signatures.")
+  | { n = Signature ds; _ } ->
+     List.fold_left
+       (fun prev next -> Result.bind prev (fun _ -> check_sig_declaration next))
+       (Result.ok ())
+       ds
+
+and check_sig_declaration d =
   match d with
-  | { n = Type_bind ((_, c_args), te); _ } ->
+  | Opaque_type (_, c_args) ->
+     check_list c_args
+  | Transparent_type ((_, c_args), te) ->
      Result.bind
        (check_list c_args)
-       (fun _ ->
-         Option.map (fun te -> check_type_expr te) te
-         |> Option.value ~default:(Result.ok ())
-       )
-  | { n = Val_bind (_, te); _ } ->
+       (fun _ -> check_type_expr te)
+  | Val_bind (_, te) ->
      check_type_expr te
+
+(* Reusing in a few places to check a list of type constructor arguments.  *)
 and check_list xs =
   let f prev next = Result.bind prev (fun _ -> check_type_expr next) in
   List.fold_left f (Result.ok ()) xs

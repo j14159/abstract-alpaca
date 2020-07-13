@@ -162,15 +162,13 @@ and format expr rem_width =
  *)
 and indented_format expr indent rem_width =
   match expr with
-  | Type { n = TE_Int; _ } ->
-     rem_width - 3, Line (indent_str indent "int")
   | Type { n = TE_Bool; _ } ->
      rem_width - 4, Line (indent_str indent "bool")
   | Type { n = TE_Unit; _ } ->
      rem_width - 4, Line (indent_str indent "unit")
   | Type { n = Var v; _ } ->
      rem_width - (String.length v), Line (indent_str indent v)
-  | Type { n = Constructor ({ n; _ }, args); _ } ->
+  | Type { n = TE_Apply ({ n; _ }, args); _ } ->
      let constr_rw = rem_width - (String.length n) - 1 in
      let rw, rev_ls = List.fold_left
                     (fun (rw, xs) n ->
