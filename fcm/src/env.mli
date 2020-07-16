@@ -9,4 +9,4 @@ val make : unit -> 'a t
 
 val next_var : 'a t -> (string * 'a t)
 
-val bind : string -> 'a -> 'a t -> 'a t
+val bind : namespace -> 'a -> 'a t -> 'a t

@@ -168,24 +168,52 @@ and indented_format expr indent rem_width =
      rem_width - 4, Line (indent_str indent "unit")
   | Type { n = Var v; _ } ->
      rem_width - (String.length v), Line (indent_str indent v)
+  | Type { n = Lab { n; _ }; _ } ->
+     rem_width - (String.length n), Line (indent_str indent n)
   | Type { n = TE_Apply ({ n; _ }, args); _ } ->
-     let constr_rw = rem_width - (String.length n) - 1 in
-     let rw, rev_ls = List.fold_left
-                    (fun (rw, xs) n ->
-                      let rw', form_n = format (Type n) rw in
-                      rw' - 1, form_n :: xs
-                    )
-                    (constr_rw, [indent_str indent n])
-                    args
-     in
-     let ls = List.rev rev_ls in
-     if rw >= 0 then
-       rw, Line (List.fold_left (fun acc n -> acc ^ " " ^ n) "" ls)
-     else
-       begin
-         match ls with
-         | h :: t -> rem_width, Multiline (h :: List.map (fun x -> indent_str (indent + 2) x) t)
-         | _ -> failwith "Type constructor format failure base case"
-       end
+     type_constructor_format n args indent rem_width
+  | Type { n = Signature ds; _ } ->
+     (* All formatted signatures are multi-line.  *)
+     let sig_init = Multiline ["{"] in
+     let sig_end = Multiline ["}"] in
+     let decl_indent = indent + 2 in
+     let rw = rem_width - 2 in
+     let decls = List.map (fun d -> snd @@ indented_decl_format d decl_indent rw) ds in
+     rw - 1, (List.fold_left flatten sig_init (decls @ [sig_end]))
   | _ ->
      failwith "Format not implemented."
+and type_constructor_format name args indent rem_width =
+  let constr_rw = rem_width - (String.length name) - 1 in
+  let rw, rev_ls = List.fold_left
+                     (fun (rw, xs) n ->
+                       let rw', form_n = format (Type n) rw in
+                       rw' - 1, form_n :: xs
+                     )
+                     (constr_rw, [indent_str indent name])
+                     args
+  in
+  let ls = List.rev rev_ls in
+  if rw >= 0 then
+    rw, Line (List.fold_left (fun acc n -> acc ^ " " ^ n) "" ls)
+  else
+    begin
+      match ls with
+      | h :: t -> rem_width, Multiline (h :: List.map (fun x -> indent_str (indent + 2) x) t)
+      | _ -> failwith "Type constructor format failure base case"
+    end
+and indented_decl_format expr indent rem_width =
+  match expr with
+  | Opaque_type ({ n = _name; pos = _pos } as l, args) ->
+(*     let prelude = indent_str indent ("type " ^ name ^ " = ") in
+     let rw = rem_width - (String.length prelude) in *)
+     (* TODO:  fix duplicate name.  *)
+     (* let rw, x = type_constructor_format name args indent rw in*)
+     let xs = List.map (fun n -> Type n) (({ n = Lab l; pos = _pos } :: args)) in
+     format_fun_header ~prefix:"type " ~sep:"" xs indent rem_width
+     (*begin
+       match x with
+       | Line l -> rw, Line (prelude ^ l)
+       | Multiline ls -> rw, Multiline (prelude :: ls)
+     end*)
+  | _ ->
+     failwith "Type declaration formatting not implemented."

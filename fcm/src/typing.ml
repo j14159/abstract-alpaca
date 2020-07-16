@@ -60,7 +60,7 @@ let rec elab_type_expr _env te =
 (* Any internal dependency between nested signature elements needs to have an
    existential hoisted out to the outer level.
  *)
-and elab_sig env s l =
+and elab_sig env s =
   (* Not the best name for this function but basically does two things at the
      same time:
        1. Turn opaque types into existential variables for the signature.

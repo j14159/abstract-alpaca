@@ -18,5 +18,5 @@ let next_var ({ next_var; _ } as e) =
   let rv = var_prefix ^ (string_of_int next_var) in
   rv, { e with next_var = next_var + 1 }
 
-let bind scope name expr ({ bindings; _ } as e) =
+let bind name expr ({ bindings; _ } as e) =
   { e with bindings = (name, expr) :: bindings }

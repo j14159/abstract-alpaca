@@ -88,12 +88,24 @@ let rec check_type_expr e =
        ds
 
 and check_sig_declaration d =
+  let check_for_vars prev next =
+    Result.bind
+      prev
+      (fun _ ->
+        match next with
+        | { n = Var _; _ } ->
+           Result.ok ()
+        | { pos; _ } ->
+           Result.error (pos, "Only variables allowed in an opaque type.")
+      )
+  in
   match d with
+  (* An opaque type should have a name and variables, nothing more.  *)
   | Opaque_type (_, c_args) ->
-     check_list c_args
+     List.fold_left check_for_vars (Result.ok ()) c_args
   | Transparent_type ((_, c_args), te) ->
      Result.bind
-       (check_list c_args)
+       (List.fold_left check_for_vars (Result.ok ()) c_args)
        (fun _ -> check_type_expr te)
   | Val_bind (_, te) ->
      check_type_expr te
