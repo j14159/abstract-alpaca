@@ -168,7 +168,7 @@ and indented_format expr indent rem_width =
      rem_width - 4, Line (indent_str indent "unit")
   | Type { n = Var v; _ } ->
      rem_width - (String.length v), Line (indent_str indent v)
-  | Type { n = Lab { n; _ }; _ } ->
+  | Type { n = Named n; _ } ->
      rem_width - (String.length n), Line (indent_str indent n)
   | Type { n = TE_Apply ({ n; _ }, args); _ } ->
      type_constructor_format n args indent rem_width
@@ -202,18 +202,67 @@ and type_constructor_format name args indent rem_width =
       | _ -> failwith "Type constructor format failure base case"
     end
 and indented_decl_format expr indent rem_width =
+  let null_pos = { uri = ""; col = 0; line = 0 } in
+  let format_header ?trailing:(t = "") name args =
+    let xs = List.map (fun n -> Type n) (({ n = Named name; pos = null_pos } :: args)) in
+    let rw, ls = format_fun_header ~prefix:"type " ~sep:"" xs indent rem_width in
+    match ls with
+    | Line l -> rw - (String.length t), Line (l ^ t)
+    | Multiline ls ->
+       let rec f memo = function
+         | [last] ->
+            let ls = List.rev ((last ^ t) :: memo) in
+            rw - (String.length t), Multiline ls
+         | h :: t ->
+            f (h :: memo) t
+         | [] ->
+            failwith "Empty Multiline variant when formatting variants."
+       in
+       f [] ls
+  in
   match expr with
-  | Opaque_type ({ n = _name; pos = _pos } as l, args) ->
-(*     let prelude = indent_str indent ("type " ^ name ^ " = ") in
-     let rw = rem_width - (String.length prelude) in *)
-     (* TODO:  fix duplicate name.  *)
-     (* let rw, x = type_constructor_format name args indent rw in*)
-     let xs = List.map (fun n -> Type n) (({ n = Lab l; pos = _pos } :: args)) in
-     format_fun_header ~prefix:"type " ~sep:"" xs indent rem_width
-     (*begin
-       match x with
-       | Line l -> rw, Line (prelude ^ l)
-       | Multiline ls -> rw, Multiline (prelude :: ls)
-     end*)
-  | _ ->
+  | Opaque_type ({ n; _ }, args) ->
+     format_header n args
+  | Transparent_type (({ n; _ }, args), body) ->
+     let rw, header = format_header n args in
+     begin
+       match header with
+       | Line _ ->
+          let rw, body = indented_format (Type body) indent rw in
+          rw, (flatten header body)
+       | Multiline _ ->
+          let rw, body = indented_format (Type body) (indent + 2) (rw - 2) in
+          rw, (flatten header body)
+     end
+  (* Variants are always multi-line.
+     TODO:  break out for variants defined in a module.
+   *)
+  | Transparent_variants (({ n; _ }, args), vs) ->
+     let rw, header = format_header ~trailing:"=" n args in
+     (* Adjust indent and remaining width for new line.  *)
+     let indent = indent + 2 in
+     let rw = rw - 2 in
+     (* Closes over indent and rw since each variant starts on a new line.  *)
+     let format_variant ({ n; _ }, t_expr) =
+       let l = "| " ^ n ^ " of " in
+       let len_l = String.length l in
+       let rw = rw - len_l in
+       (* Try to fit on one line.  *)
+       let rw', t_expr_l = indented_format (Type t_expr) 0 rw in
+       let ls = match t_expr_l with
+         | Line l2 when rw' < rw -> Line (indent_str indent (l ^ l2))
+         | Multiline _ ->
+            let _, redo = indented_format (Type t_expr) indent rw in
+            flatten (Line (indent_str indent l)) redo
+         | _ -> flatten (Line (indent_str indent l)) t_expr_l
+       in
+       ls
+     in
+     let lines = List.fold_left
+                   (fun acc next -> flatten acc (format_variant next))
+                   header
+                   vs
+     in
+     rw, lines
+  | Val_bind (_name, _t_expr) ->
      failwith "Type declaration formatting not implemented."

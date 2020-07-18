@@ -93,6 +93,8 @@ and elab_sig env s =
          (acc_vs @ (exi_var :: all_vs)), (name, after_elab), env2
     | Transparent_type (_constr, _t_expr) ->
        failwith "No signature transparent type support yet."
+    | Transparent_variants ((_name, _args), _vs) ->
+       failwith "No signature variants typing support yet."
     | Val_bind (_name, _t_expr) ->
        failwith "No signature value binding yet."
     in

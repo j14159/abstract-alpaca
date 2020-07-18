@@ -20,11 +20,10 @@ and type_expr =
   | TE_Bool
   | TE_Arrow of type_expr node * type_expr node
   | Var of string
-  | Lab of label
+  | Named of string
   (* e.g. `type list 'x` *)
   | TE_Apply of label * type_expr node list
   | TDot of type_expr node * label
-  | Variants of (string node * type_expr node) list
   | Signature of decl list
 
 (* Elements of a signature type declaration (a structure type to a module's
@@ -33,11 +32,16 @@ and type_expr =
 and decl =
   | Opaque_type of type_constructor
   | Transparent_type of type_constructor * type_expr node
+  (* Variants on their own are not a valid type expression so they're treated
+     separately here.
+   *)
+  | Transparent_variants of type_constructor * ((string node * type_expr node) list)
+  (* TODO:  this doesn't admit type variables:  *)
   | Val_bind of label * type_expr node
 
 type term =
   | Unit
-  | Label of label
+  | Label of string
   | Variant of label * term node
   | Fun of term node * term node
   (* Field access, could be for a module, signature, or record:  *)
@@ -48,6 +52,7 @@ type term =
 (* Elements of a module expression (structure literal/expression).  *)
 and bind =
   | Type_decl of type_constructor * type_expr node
+  | Variant_decl of type_constructor * ((string node * type_expr node) list)
   | Let_bind of label * expr node
 
 and expr =
@@ -63,21 +68,15 @@ let rec check_type_expr e =
   match e with
   | {n = TE_Unit; _ } | { n = TE_Bool; _ } ->
      Result.ok ()
-  | { n = TE_Arrow ({n = Variants _; _ }, _); pos }
-    | { n = TE_Arrow (_, {n = Variants _; _ }); pos } ->
-     Result.error (pos, "Arrow type expressions cannot specify variants.")
   | { n = TE_Arrow (a, b); _ } ->
      Result.bind (check_type_expr a) (fun _ -> check_type_expr b)
   | { n = Var _; _ } ->
      Result.ok ()
-  | { n = Lab _; _ } ->
+  | { n = Named _; _ } ->
      Result.ok ()
   | { n = TE_Apply (_, exprs); _ } ->
      check_list exprs
-  | { n = Variants xs; _ } ->
-     let f prev (_, next) = Result.bind prev (fun _ -> check_type_expr next) in
-     List.fold_left f (Result.ok ()) xs
-  | { n = TDot ({ n = Signature _; _ }, _); _ } | { n = TDot ({ n = Lab _; _ }, _); _ } ->
+  | { n = TDot ({ n = Signature _; _ }, _); _ } | { n = TDot ({ n = Named _; _ }, _); _ } ->
      Result.ok ()
   | { n = TDot _; pos } ->
      Result.error (pos, "Field access type expressions only permitted on labels and signatures.")
@@ -103,10 +102,15 @@ and check_sig_declaration d =
   (* An opaque type should have a name and variables, nothing more.  *)
   | Opaque_type (_, c_args) ->
      List.fold_left check_for_vars (Result.ok ()) c_args
-  | Transparent_type ((_, c_args), te) ->
-     Result.bind
+  | Transparent_type ((_, _c_args), _te) ->
+     (* Result.bind
        (List.fold_left check_for_vars (Result.ok ()) c_args)
-       (fun _ -> check_type_expr te)
+       (fun _ -> check_type_expr te) *)
+     failwith "No."
+  | Transparent_variants ((_, c_args), xs) ->
+     let var_check = List.fold_left check_for_vars (Result.ok ()) c_args in
+     let f prev (_, next) = Result.bind prev (fun _ -> check_type_expr next) in
+     List.fold_left f var_check xs
   | Val_bind (_, te) ->
      check_type_expr te
 
