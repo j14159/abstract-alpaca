@@ -1,4 +1,4 @@
-(* Generation of labels, need to expand to full unicode for later experiments.
+(* Generation of AST fragments.
  *)
 open QCheck
 

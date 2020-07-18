@@ -1,4 +1,4 @@
 (tests
- (names core_test label_gen)
+ (names core_test ast_gen)
  (libraries core fcm qcheck-ounit qcheck-core ounit2)
 )
