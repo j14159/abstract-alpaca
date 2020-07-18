@@ -96,6 +96,7 @@ let rec format_fun_header ?prefix:(prefix="fun ") ?sep:(sep="->") args indent re
   in
   let multi_line () =
     let init = [(make_indent indent) ^ prefix ^ (snd (format (List.hd args) rem_width))] in
+    (* Line up with the function name's start:  *)
     let indent_amt = (indent + String.length prefix) in
     let form x =
       match indented_format x indent_amt rem_width with
@@ -224,7 +225,7 @@ and indented_decl_format expr indent rem_width =
   | Opaque_type ({ n; _ }, args) ->
      format_header n args
   | Transparent_type (({ n; _ }, args), body) ->
-     let rw, header = format_header n args in
+     let rw, header = format_header ~trailing:"=" n args in
      begin
        match header with
        | Line _ ->
@@ -252,7 +253,10 @@ and indented_decl_format expr indent rem_width =
        let ls = match t_expr_l with
          | Line l2 when rw' < rw -> Line (indent_str indent (l ^ l2))
          | Multiline _ ->
-            let _, redo = indented_format (Type t_expr) indent rw in
+            (* Indent 4 more to be "inside" the variant/tag's margin:  *)
+            let indent' = indent + 4 in
+            let rw' = rw - 4 in
+            let _, redo = indented_format (Type t_expr) indent' rw' in
             flatten (Line (indent_str indent l)) redo
          | _ -> flatten (Line (indent_str indent l)) t_expr_l
        in

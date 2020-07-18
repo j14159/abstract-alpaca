@@ -68,15 +68,28 @@ let type_apply_gen =
   let open Fcm.Core in
   Gen.map (fun (name, args) -> TE_Apply (name, args)) (gen_label_and_nodes arg_list)
 
-(* TODO:
+(* [ available_types ] is a list of {! Fcm.Core.type_constructor } instances.
+   TODO:
    - Transparent gen.  Feed vars into definition.
-   - Variant gen.
  *)
 let type_decl_gen available_types =
   let open Fcm.Core in
   let open Gen in
-  (* TODO:  generator based on in-scope generated types.  *)
-  let available_gen = oneofl (available_types @ base_type) in
+  let available_gen vars =
+    let ag =
+      let simple_types = vars @ base_type in
+      let st_gen = oneofl simple_types in
+      let arg_of_st = fun st -> { n = st; pos = null_pos } in
+      (oneofl available_types) >>= (fun ({ n; _ }, args) ->
+        let gen_list = List.map (fun _ -> map arg_of_st st_gen) args in
+        map (fun args' -> TE_Apply ({ n; pos = null_pos}, args')) (flatten_l gen_list)
+      )
+    in
+    if (List.length available_types > 0) then
+      oneof [ag; oneofl base_type]
+    else
+      oneofl base_type
+  in
   let arg_list = small_list var_gen in
   let opaque_gen =
     map (fun (name, args) -> Opaque_type (name, args)) (gen_label_and_nodes arg_list)
@@ -85,7 +98,7 @@ let type_decl_gen available_types =
     (* TODO:  variants that take unit stand in for nullary variants here but
               I'm not sure that's good enough.
      *)
-    let available_type_nodes = map (fun x -> { n = x; pos = null_pos }) available_gen in
+    let available_type_nodes = available_gen vars in
     let arg = if (List.length vars > 0) then
                 oneof [oneofl vars; available_type_nodes]
               else
@@ -94,33 +107,50 @@ let type_decl_gen available_types =
     (* TODO:  real positions?  *)
     let variant =
       map
-        (fun (l, t) -> ({ n = l; pos = null_pos }, t))
+        (fun (l, t) -> ({ n = l; pos = null_pos }, { n = t; pos = null_pos }))
         (pair label arg)
     in
     small_list variant
   in
-  (* TODO:  use in-scope types, not just variants and base types.  *)
+
+  (* TODO:  enable use of types from other signatures.  *)
   let transparent_gen =
     (* Re-use arg_list to synthesize a list of type variables.  *)
     (gen_label_and_nodes arg_list)
     >>=
       (fun (name, args) ->
-      map
-        (fun vs -> Transparent_variants ((name, args), vs))
-        (variant_gen args))
+        let non_node_args = (List.map (fun { n; _ } -> n) args) in
+        oneof [ map
+                   (fun vs -> Transparent_variants ((name, args), vs))
+                   (variant_gen non_node_args)
+               ; map
+                   (fun t -> Transparent_type ((name, args), { n = t; pos = null_pos }))
+                   (available_gen non_node_args)
+          ]
+      )
   in
   oneof [opaque_gen; transparent_gen]
 
 let sig_gen =
   let open Fcm.Core in
-  (* TODO:  real position, and type declarations should have correct positions
-     relative to each other.
-   *)
-  (* Roughly:
-       - Small int for number of types.
-       - List.init to allocate.
-       - fold_left, using previously defined types as inputs to type_apply_gen
-   *)
-  Gen.map
+  let extract memo = function
+    | Opaque_type c -> c :: memo
+    | Transparent_type (c, _) -> c :: memo
+    | Transparent_variants (c, _) -> c :: memo
+    | Val_bind _ -> memo
+  in
+  let rec f memo available c =
+    if c < 0 then
+      (* Gross...I'm sure I'm missing a much better way to do this.  *)
+      Gen.oneofl [List.rev memo]
+    else
+      begin
+        let next = type_decl_gen available in
+        let open Gen in
+        next >>= (fun x -> f (x :: memo) (extract available x) (c -1 ))
+      end
+  in
+  let open Gen in
+  map
     (fun ds -> Type ({ n = Signature ds; pos = null_pos }))
-    (Gen.small_list (type_decl_gen []))
+    (Gen.small_int >>= (fun c -> f [] [] c))
