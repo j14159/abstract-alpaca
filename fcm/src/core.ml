@@ -102,17 +102,17 @@ and check_sig_declaration d =
   (* An opaque type should have a name and variables, nothing more.  *)
   | Opaque_type (_, c_args) ->
      List.fold_left check_for_vars (Result.ok ()) c_args
-  | Transparent_type ((_, _c_args), _te) ->
-     (* Result.bind
+  | Transparent_type ((_, c_args), te) ->
+     Result.bind
        (List.fold_left check_for_vars (Result.ok ()) c_args)
-       (fun _ -> check_type_expr te) *)
-     failwith "No."
+       (fun _ -> check_type_expr te)
   | Transparent_variants ((_, c_args), xs) ->
      let var_check = List.fold_left check_for_vars (Result.ok ()) c_args in
      let f prev (_, next) = Result.bind prev (fun _ -> check_type_expr next) in
      List.fold_left f var_check xs
   | Val_bind (_, te) ->
-     check_type_expr te
+     let _ = check_type_expr te in
+     failwith "No."
 
 (* Reusing in a few places to check a list of type constructor arguments.  *)
 and check_list xs =

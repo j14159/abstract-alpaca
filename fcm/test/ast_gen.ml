@@ -68,6 +68,23 @@ let type_apply_gen =
   let open Fcm.Core in
   Gen.map (fun (name, args) -> TE_Apply (name, args)) (gen_label_and_nodes arg_list)
 
+let available_gen available_types vars =
+  let open Fcm.Core in
+  let open Gen in
+  let ag =
+    let simple_types = vars @ base_type in
+    let st_gen = oneofl simple_types in
+    let arg_of_st = fun st -> { n = st; pos = null_pos } in
+    (oneofl available_types) >>= (fun ({ n; _ }, args) ->
+      let gen_list = List.map (fun _ -> map arg_of_st st_gen) args in
+      map (fun args' -> TE_Apply ({ n; pos = null_pos}, args')) (flatten_l gen_list)
+    )
+  in
+  if (List.length available_types > 0) then
+    oneof [ag; oneofl base_type]
+  else
+    oneofl base_type
+
 (* [ available_types ] is a list of {! Fcm.Core.type_constructor } instances.
    TODO:
    - Transparent gen.  Feed vars into definition.
@@ -75,21 +92,6 @@ let type_apply_gen =
 let type_decl_gen available_types =
   let open Fcm.Core in
   let open Gen in
-  let available_gen vars =
-    let ag =
-      let simple_types = vars @ base_type in
-      let st_gen = oneofl simple_types in
-      let arg_of_st = fun st -> { n = st; pos = null_pos } in
-      (oneofl available_types) >>= (fun ({ n; _ }, args) ->
-        let gen_list = List.map (fun _ -> map arg_of_st st_gen) args in
-        map (fun args' -> TE_Apply ({ n; pos = null_pos}, args')) (flatten_l gen_list)
-      )
-    in
-    if (List.length available_types > 0) then
-      oneof [ag; oneofl base_type]
-    else
-      oneofl base_type
-  in
   let arg_list = small_list var_gen in
   let opaque_gen =
     map (fun (name, args) -> Opaque_type (name, args)) (gen_label_and_nodes arg_list)
@@ -98,7 +100,7 @@ let type_decl_gen available_types =
     (* TODO:  variants that take unit stand in for nullary variants here but
               I'm not sure that's good enough.
      *)
-    let available_type_nodes = available_gen vars in
+    let available_type_nodes = available_gen available_types vars in
     let arg = if (List.length vars > 0) then
                 oneof [oneofl vars; available_type_nodes]
               else
@@ -125,11 +127,29 @@ let type_decl_gen available_types =
                    (variant_gen non_node_args)
                ; map
                    (fun t -> Transparent_type ((name, args), { n = t; pos = null_pos }))
-                   (available_gen non_node_args)
+                   (available_gen [] non_node_args)
           ]
       )
   in
   oneof [opaque_gen; transparent_gen]
+let val_bind_gen available_types =
+  let open Fcm.Core in
+  let open Gen in
+  let available_type_nodes = available_gen available_types [] in
+  map
+    (fun (name, args) ->
+      let args = List.map (fun x -> { n = x; pos = null_pos }) args in
+      let body = match args with
+        (* Can't have an empty value binding... *)
+        | [] ->
+           { n = TE_Unit; pos = null_pos }
+        | h :: t ->
+           List.fold_right (fun next acc -> { n = TE_Arrow (next, acc); pos = null_pos }) t h
+      in
+      Val_bind ( { n = name; pos = null_pos }
+               , body)
+    )
+    (pair label (small_list available_type_nodes))
 
 let sig_gen =
   let open Fcm.Core in
@@ -145,7 +165,7 @@ let sig_gen =
       Gen.oneofl [List.rev memo]
     else
       begin
-        let next = type_decl_gen available in
+        let next = Gen.oneof [type_decl_gen available; val_bind_gen available] in
         let open Gen in
         next >>= (fun x -> f (x :: memo) (extract available x) (c -1 ))
       end

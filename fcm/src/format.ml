@@ -180,7 +180,15 @@ and indented_format expr indent rem_width =
      let decl_indent = indent + 2 in
      let rw = rem_width - 2 in
      let decls = List.map (fun d -> snd @@ indented_decl_format d decl_indent rw) ds in
-     rw - 1, (List.fold_left flatten sig_init (decls @ [sig_end]))
+
+     (* Add newlines between each declaration:  *)
+     let double_spaced =
+       List.fold_left
+         (fun acc next -> flatten acc (flatten (Line "") next))
+         sig_init
+         decls
+     in
+     rw - 1, (flatten double_spaced sig_end)
   | _ ->
      failwith "Format not implemented."
 and type_constructor_format name args indent rem_width =
@@ -190,17 +198,18 @@ and type_constructor_format name args indent rem_width =
                        let rw', form_n = format (Type n) rw in
                        rw' - 1, form_n :: xs
                      )
-                     (constr_rw, [indent_str indent name])
+                     (constr_rw, [])
                      args
   in
+  let indented_name = (indent_str indent name) in
   let ls = List.rev rev_ls in
   if rw >= 0 then
-    rw, Line (List.fold_left (fun acc n -> acc ^ " " ^ n) "" ls)
+    rw, Line (List.fold_left (fun acc n -> acc ^ " " ^ n) indented_name ls)
   else
     begin
       match ls with
       | h :: t -> rem_width, Multiline (h :: List.map (fun x -> indent_str (indent + 2) x) t)
-      | _ -> failwith "Type constructor format failure base case"
+      | _ -> rem_width, Line indented_name
     end
 and indented_decl_format expr indent rem_width =
   let null_pos = { uri = ""; col = 0; line = 0 } in
@@ -268,5 +277,61 @@ and indented_decl_format expr indent rem_width =
                    vs
      in
      rw, lines
-  | Val_bind (_name, _t_expr) ->
-     failwith "Type declaration formatting not implemented."
+  | Val_bind ({ n; _ }, t_expr) ->
+     let init = "val " ^ n ^ " : " in
+     let rem_after_init = rem_width - (String.length init) in
+     let init = indent_str indent init in
+     let sep = " -> " in
+     let sep_len = String.length sep in
+     let indent = indent + 2 in
+     let mf_rem = rem_width - 2 in
+     let nested_apply maybe_apply lines =
+       match maybe_apply, lines with
+       | { n = TE_Apply _; _ }, Line l -> Line (indent_str indent ("(" ^ (String.trim l) ^ ")"))
+       | { n = TE_Apply _; _ }, Multiline _ls -> failwith "no multiline TE_Apply"
+       | _ -> lines
+     in
+     let rec mf rw memo next =
+       match next with
+       | { n = TE_Arrow (h, t); _ } ->
+          let _, ls = indented_format (Type h) indent mf_rem in
+          let ls = bookend "" sep (nested_apply h ls) in
+          mf rw (ls :: memo) t
+       | other ->
+          let rw, last_ls = indented_format (Type other) indent mf_rem in
+          rw, List.fold_left (fun acc next -> flatten acc next) (Line init) (List.rev (last_ls :: memo))
+     in
+     let rec sf rw memo next =
+       (* This breaks tail recursion but I'm assuming most value bindings are
+          not big enough for that to be a concern in this toy.
+        *)
+       let backtrack_hatch f = function
+         | Line l -> f l
+         | Multiline _ -> mf rem_after_init [] t_expr
+       in
+       match next with
+       | { n = TE_Arrow (h, t); _ } ->
+          (* If we've run out of room, give up and go multi-line. *)
+          if rw < 0 then
+            mf rem_width [] t_expr
+          else
+            let rw, l = indented_format (Type h) 0 rw in
+            backtrack_hatch
+              (fun l ->
+                match h with
+                | { n = TE_Apply _; _ } ->
+                   (* -2 for parens:  *)
+                   sf (rw - sep_len - 2) (("(" ^ l ^ ")" ^ sep) :: memo) t
+                | _ ->
+                   sf (rw - sep_len) ((l ^ sep) :: memo) t
+              )
+              l
+       | other ->
+          let rw, last = indented_format (Type other) 0 rw in
+          backtrack_hatch
+            (fun l ->
+              let l = List.fold_left (fun acc next -> acc ^ next) init (List.rev (l :: memo)) in
+              rw, Line l
+            ) last
+     in
+     sf rem_after_init [] t_expr
