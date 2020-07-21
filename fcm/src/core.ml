@@ -111,8 +111,7 @@ and check_sig_declaration d =
      let f prev (_, next) = Result.bind prev (fun _ -> check_type_expr next) in
      List.fold_left f var_check xs
   | Val_bind (_, te) ->
-     let _ = check_type_expr te in
-     failwith "No."
+     check_type_expr te
 
 (* Reusing in a few places to check a list of type constructor arguments.  *)
 and check_list xs =
