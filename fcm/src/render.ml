@@ -91,7 +91,7 @@ let spacing_size { text; single_line = { left; right }; _ } =
   (String.length text) + left + right
   
 let single_ws_spacing =
-  spacing "" { left = 0; right = 1 } (Next_line { left = 0; right = indent })
+  spacing "" { left = 0; right = 1 } (Next_line { left = indent; right = 0 })
 
 let no_spacing =
   spacing "" { left = 0; right = 0 } (Same_line { left = 0; right = 0 })
@@ -222,29 +222,36 @@ let rec single_line_of_seq seq config indent rem_width =
   loop init (List.tl seq) []
 
 and multi_line_of_seq seq config orig_indent rem_width =
+  print_endline (string_of_int orig_indent);
   let { s; e }, spacing = config in
-  let indent, rw, prelude = match s.multi_line with
+  let inner_indent, rw, prelude = match s.multi_line with
     | Same_line { left; right } ->
-       let init = (indent_str left s.text) ^ (spacer right) in
-       let indent = (String.length init) +  orig_indent in
+       let init = indent_str orig_indent ((indent_str left s.text) ^ (spacer right)) in
+       let i = (String.length init) +  orig_indent in
        let rw = rem_width - (String.length init) in
        begin
          match (List.hd seq) 0 (rem_width - (String.length s.text) - right) with
          | _, Line l ->
-            indent, rw, Line (init ^ l)
+            print_endline ("Single line head:" ^ l);
+            i, rw, Line (init ^ l)
          | _, Multiline (h :: t) ->
-           ( indent
-           , rw
-           , Multiline ((init ^ h) :: (List.map (fun x -> indent_str indent x) t))
-           )
+            ( i
+            , rw
+            , Multiline ((init ^ h) :: (List.map (fun x -> indent_str i x) t))
+            )
          | _ ->
             failwith "multi_line_seq unreachable base case."
        end
     | Next_line { left; right } ->
-       let init = Line (indent_str orig_indent ((spacer left) ^ s.text ^ (spacer right))) in
-       let _, ls = (List.hd seq) orig_indent rem_width in
-       orig_indent + indent, rem_width - 2, flatten init ls
+       let init =
+         Line (indent_str orig_indent ((spacer left) ^ s.text ^ (spacer right)))
+       in
+       let i, rw = orig_indent + indent, rem_width - indent in
+       let _, ls = (List.hd seq) i rw in
+       i, rw, flatten init ls
   in
+
+  print_endline ("Inner indent " ^ (string_of_int inner_indent));
 
   let handle_sep (_, ls) =
     let ms { left; right } = (spacer left) ^ spacing.text ^ (spacer right) in
@@ -253,15 +260,21 @@ and multi_line_of_seq seq config orig_indent rem_width =
     | Same_line spc -> do_on_last ls (fun s -> s ^ (ms spc))
   in
 
-  let chunks = List.map (fun f -> handle_sep @@ f indent rw) (List.tl seq) in
+  let chunks = List.map (fun f -> handle_sep @@ f inner_indent rw) (List.tl seq) in
   let without_end = List.fold_left (fun acc next -> flatten acc next) prelude chunks in
   let with_end = match e.multi_line with
     | Same_line { left; right } ->
        let f str = str ^ (spacer left) ^ e.text ^ (spacer right) in
        do_on_last without_end f
     | Next_line { left; right } ->
+       let actual_indent = match s.multi_line with
+         | Next_line _ -> orig_indent
+         | _ -> orig_indent
+       in
+       print_endline ("Actual indent " ^ (string_of_int actual_indent));
+       print_endline ("Original indent " ^ (string_of_int orig_indent));
        let end_text = 
-         indent_str indent (spacer left) ^ e.text ^ (spacer right)
+         indent_str actual_indent ((spacer left) ^ e.text ^ (spacer right))
        in
        flatten without_end (Line end_text)
   in
@@ -276,8 +289,9 @@ and indented_format ?config:(config = None) expr indent rem_width =
   let format_str n i w =
     w - (String.length n), Line (indent_str i n)
   in
-  let format_te te i w =
-    indented_format ~config:(Some nested_expr_config) (Type te) i w
+  (* Currying indent and rem_width.  *)
+  let format_te te =
+    indented_format ~config:(Some nested_expr_config) (Type te)
   in
   match expr with
   | Type { n = TE_Bool; _ } ->
@@ -304,9 +318,12 @@ and indented_format ?config:(config = None) expr indent rem_width =
   |_ ->
     failwith "Unsupported formatting."
 
-let render ?width:(w = width) expr =
-  match snd @@ indented_format expr 0 w with
+let to_string ls =
+  match ls with
   | Line s -> s
   | Multiline lines ->
      List.fold_left (fun acc next -> acc ^ "\n" ^ next) (List.hd lines) (List.tl lines)
+
+let render ?width:(w = width) expr =
+  to_string (snd @@ indented_format expr 0 w)
 

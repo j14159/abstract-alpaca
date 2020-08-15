@@ -20,3 +20,6 @@ let next_var ({ next_var; _ } as e) =
 
 let bind name expr ({ bindings; _ } as e) =
   { e with bindings = (name, expr) :: bindings }
+
+let local name { bindings; _ } =
+  List.assoc_opt (Local name) bindings

@@ -1,19 +1,23 @@
 (* Core syntax, not the elaboration.  *)
 
 type pos = { uri : string; col : int; line : int }
+[@@deriving show]
 
 let null_pos = { uri = "file://dev/null"; col = 0; line = 0 }
 
 (* Allow for expression vs type expression nodes.
  *)
 type 'n node = { n : 'n; pos : pos }
+[@@deriving show]
 
 type label = string node
+[@@deriving show]
 
 (* Starting with a label introduces a syntactic restriction to avoid
    higher-order kinds.
  *)
 and type_constructor = label * type_expr node list
+[@@deriving show]
 
 and type_expr =
   | TE_Unit
@@ -21,10 +25,15 @@ and type_expr =
   | TE_Arrow of type_expr node * type_expr node
   | Var of string
   | Named of string
-  (* e.g. `type list 'x` *)
+  (* e.g. applying `type list 'x` (a functor) in `list int`
+
+     TODO:  dotted application.
+
+   *)
   | TE_Apply of label * type_expr node list
   | TDot of type_expr node * label
   | Signature of decl list
+[@@deriving show]
 
 (* Elements of a signature type declaration (a structure type to a module's
    structure expression).
@@ -38,6 +47,7 @@ and decl =
   | Transparent_variants of type_constructor * ((string node * type_expr node) list)
   (* TODO:  this doesn't admit type variables:  *)
   | Val_bind of label * type_expr node
+[@@deriving show]
 
 type term =
   | Unit
@@ -48,18 +58,21 @@ type term =
   | Dot of term node * label
   | Mod of bind list
   | Pack of term node * term node
+[@@deriving show]
 
 (* Elements of a module expression (structure literal/expression).  *)
 and bind =
   | Type_decl of type_constructor * type_expr node
   | Variant_decl of type_constructor * ((string node * type_expr node) list)
   | Let_bind of label * expr node
+[@@deriving show]
 
 and expr =
   | Term of term node
   (* Allows for annotation with variants, not good:  *)
   | Ann_term of (term * type_expr) node
   | Type of type_expr node
+[@@deriving show]
 
 (* Ensure a type expression is well constructed but does *not* check if it is
    well-kinded nor typed.  Maybe wasted effort in future?

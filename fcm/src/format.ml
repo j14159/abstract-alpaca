@@ -58,7 +58,85 @@ let expand_fun f =
   in
   expand f []
 
-  (* Function/binding headers are formatted separately from the body since there
+let seq_of_expr = function
+  | Type { n = TE_Apply ({ n; _ }, args); _ } ->
+     (Type { n = Named n; pos = null_pos }) :: (List.map (fun te -> Type te) args)
+  | other ->
+     [other]
+
+(* Format a sequence of expressions, e.g. a function header or application.
+
+   Type constructors, function headers, and their application to arguments are
+   all represented syntactically as a sequence of expressions.  Nested complex
+   expressions like additional applications of type constructors and functions
+   need to be treated properly, contained with parens.  In future, tuples will
+   be similarly handled.
+
+   format_expr_seq abstracts all these cases.
+ *)
+let rec format_expr_seq
+      ?prefix:(prefix = "")
+      ?suffix:(suffix = "")
+      ?sep:(sep = " ")
+      ?complex_container:(complex_container = ("(", ")"))
+      seq
+      indent
+      rem_width
+  =
+  let complex expr indent rem_width =
+    match expr with
+    | (Type { n = TE_Apply _; _ }) as e ->
+       let seq = seq_of_expr e in
+       let rw, ls = format_expr_seq ~prefix ~suffix ~sep ~complex_container seq indent rem_width in
+       let sc, ec = complex_container in
+       begin
+         match ls with
+         | Multiline _ -> failwith "No multiline complex TE_Apply."
+         | Line l -> rw - 2, Line (sc ^ l ^ ec)
+       end
+    | expr ->
+       indented_format expr indent rem_width
+  in
+  let multi_line xs rw =
+    let init = (make_indent indent) ^ prefix ^ (snd (format (List.hd xs) rem_width)) in
+    let rec loop memo xs rw indent =
+    match xs with
+    | [] ->
+       List.rev memo
+    | h :: t ->
+       let _, ls =  (complex h indent rw) in
+       let ls = bookend "" sep ls in
+       loop (ls :: memo) t rw indent
+    in
+    let ls = loop [] (List.tl xs) (rw - 2) (indent + 2) in
+    rw, (List.fold_left (fun acc next -> flatten acc next) (Line init) ls)
+  in
+  let rec single_line memo xs rw =
+    match xs with
+    | [] ->
+       Some
+         (rw, Line
+                   (List.fold_left
+                      (fun acc next -> acc ^ sep ^ next)
+                      prefix
+                      (suffix :: (List.rev memo))
+                   )
+         )
+    | h :: t ->
+       begin
+         match complex h 0 rw with
+         (* Bail out, pursue multiline format:  *)
+         | _, Multiline _ -> None
+         (* Keep trying to build a single line:  *)
+         | rw, Line l -> single_line (l :: memo) t (rw - String.length sep)
+       end
+  in
+  let rw = rem_width - (String.length prefix) - (String.length suffix) in
+  match single_line [] seq rw with
+  | Some res -> res
+  | None -> multi_line seq rw
+
+(* Function/binding headers are formatted separately from the body since there
    are two ways they may go multi-line:
    1. If the header (arguments, and name in the case of bindings) is too big
       to fit on one line.  In this case the arguments are distributed over
@@ -74,7 +152,7 @@ let expand_fun f =
    basically just thunks to defer computation of multi-line headers until we
    know it's required.
  *)
-let rec format_fun_header ?prefix:(prefix="fun ") ?sep:(sep="->") args indent rem_width =
+and format_fun_header ?prefix:(prefix="fun ") ?sep:(sep="->") args indent rem_width =
   let single_line () =
     let buf = Buffer.create 100 in
     Buffer.add_string buf (make_indent indent);
@@ -286,6 +364,7 @@ and indented_decl_format expr indent rem_width =
      let indent = indent + 2 in
      let mf_rem = rem_width - 2 in
      let nested_apply maybe_apply lines =
+
        match maybe_apply, lines with
        | { n = TE_Apply _; _ }, Line l -> Line (indent_str indent ("(" ^ (String.trim l) ^ ")"))
        | { n = TE_Apply _; _ }, Multiline _ls -> failwith "no multiline TE_Apply"
