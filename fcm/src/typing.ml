@@ -117,6 +117,10 @@ let rec elab_type_expr env te =
 (* Elaborate without enclosing in existential abstraction.  *)
 and internal_elab env te =
   match te with
+  | { n = TE_Bool; _ } ->
+     [], TSmall (TBase TBool), env
+  | { n = TE_Unit; _ } ->
+     [], TSmall (TBase TUnit), env
   | { n = Var v; _ } ->
      [], TSmall (TVar v), env
   | { n = TE_Apply ({ n; _ }, args); _ } ->
@@ -145,11 +149,12 @@ and internal_elab env te =
      let vs2, elab_b, env3 = internal_elab env2 b in
      let arr = match elab_a, elab_b with
        (* Assume impure for now until syntax expands to allow pure.  *)
-       | TLarge a, TLarge b -> TL_arrow (Impure, a, b)
-       | TLarge a, TSmall b -> TL_arrow (Impure, a, TSmol b)
+       | TLarge a, TLarge b -> TLarge (TL_arrow (Impure, a, b))
+       | TLarge a, TSmall b -> TLarge (TL_arrow (Impure, a, TSmol b))
+       | TSmall a, TSmall b -> TSmall (TArrow (a, b))
        | _ -> failwith "Unsupported arrow type expression."
      in
-     vs1 @ vs2, (TLarge arr), env3
+     vs1 @ vs2, arr, env3
   | { n = Signature  decls; _ } ->
      elab_sig env decls
   | _ ->

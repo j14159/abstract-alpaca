@@ -91,9 +91,7 @@ let test_functor _ =
   (* { type t } -> { val f : t -> t }
      
      Should elaborate to:
-       exi[X].{ t : (=X)} -> exi[X].{ f : X -> X }
-
-     I think?
+       exi[X].{ t : [=X]} -> exi[X].{ f : [=X] -> [=X\ }
    *)
   let arg = { n = Signature [Opaque_type ({ n = "t"; pos = null_pos }, [])]
             ; pos = null_pos
@@ -137,10 +135,72 @@ let test_functor _ =
   in
   assert_equal expected_res res ~printer:[%derive.show: Fcm.Typing.typ]
 
+(* Mix a functor and regular function in the same signature.
+
+   Reuses the functor from `test_functor`.
+
+   { val f : { type t } -> { val f : t -> t }
+     val g : bool -> unit
+   }
+
+   Should elaborate to:
+
+   abs[exi(v_0)].{ val f : { t : [=v_0] } -> { val f : [=v_0] -> [=v_0] }
+                   val g : [=bool] -> [=unit]
+                 }
+
+ *)
+let test_functor_and_function _ =
+  let expected_f =
+    let sig1 = TSig (Open
+                       { var = None
+                       ; fields = [("t", TLarge (TTyp "v_0"))]
+                       }
+                 )
+    in
+    let sig2 = TSig (Open
+                       { var = None
+                       ; fields = [( "f"
+                                   , TLarge (TL_arrow ( Impure
+                                                      , TTyp "v_0"
+                                                      , TTyp "v_0"))
+                                   )]
+                       }
+                 )
+    in
+    TL_arrow (Impure, sig1, sig2)
+  in
+  let expected_g = TArrow (TBase TBool, TBase TUnit) in
+  let expected_sig = TSig (Open { var = None
+                                ; fields = [ "f", TLarge expected_f
+                                           ; "g", TSmall expected_g] })
+  in
+  let expected = TLarge (TAbs (Exi ("v_0", KType), expected_sig)) in
+
+  let np_sig ds = te_sig ds null_pos in
+  let core_sig =
+    let f =
+      let app = type_apply (label "t" null_pos) [] null_pos in
+      te_arrow
+              (np_sig [Opaque_type (null_node "t", [])])
+              (np_sig [Val_bind (null_node "f", te_arrow app app null_pos)])
+    in
+    let g = te_arrow (te_bool null_pos) (te_unit null_pos) in
+    te_sig
+      [ Val_bind (null_node "f", f null_pos)
+      ; Val_bind (null_node "g", g null_pos)
+      ]
+      null_pos
+  in
+
+  let _, res, _ = elab_type_expr (Fcm.Env.make ()) core_sig in
+  assert_equal expected res ~printer:[%derive.show: typ]
+
 let suite =
   "Basic elaboration tests" >:::
     test_simple_sig_elab @
       [ "Simple functor type" >:: test_functor
+      ; "Functor and function in signature" >:: test_functor_and_function
       ]
 
 let _ =

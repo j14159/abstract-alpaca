@@ -130,3 +130,20 @@ and check_sig_declaration d =
 and check_list xs =
   let f prev next = Result.bind prev (fun _ -> check_type_expr next) in
   List.fold_left f (Result.ok ()) xs
+
+let label txt pos =
+  { n = txt; pos }
+let te_arrow a b pos =
+  { n = TE_Arrow (a, b); pos }
+let te_bool pos =
+  { n = TE_Bool; pos }
+let te_unit pos =
+  { n = TE_Unit; pos }
+
+let te_sig decls pos =
+  { n = Signature decls; pos }
+
+let type_const l xs =
+  (l, xs)
+let type_apply l args pos =
+  { n = TE_Apply (l, args); pos }
