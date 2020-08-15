@@ -96,15 +96,12 @@ let bind_from_sig t env =
     match e with
     | TAbs (_, other) -> lf other
     | (TSig (Open { fields; _ }))->
-       print_endline "Binding sig members.";
        List.fold_left (fun e (n, t) -> Env.bind (Local n) t e) env fields
     | _ -> env
   in
   match t with
   | TLarge l -> lf l
-  | _other ->
-     print_endline ([%derive.show: typ] _other);
-     env
+  | _other ->   env
 
 let rec elab_type_expr env te =
   let vs, res, env = internal_elab env te in
