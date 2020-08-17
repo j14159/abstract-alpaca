@@ -19,12 +19,12 @@ let base_type =
   let open Fcm.Core in
   [TE_Unit; TE_Bool]
 
-let label =
+let label_gen =
   let chars = Gen.pair first_valid rem_valid in
   Gen.map (fun (a, b) -> Core.String.of_char_list (a :: b)) chars
 
 let var_gen =
-  Gen.map (fun l -> Fcm.Core.Var ("'" ^ l) ) label
+  Gen.map (fun l -> Fcm.Core.Var ("'" ^ l) ) label_gen
 
 (* Generate a label, e.g. a function name or type constructor name, followed
    by a list of nodes like type variables, types, etc.
@@ -53,7 +53,7 @@ let gen_label_and_nodes node_gen =
     in
     label, nodes'
   in
-  Gen.map f (Gen.pair label node_gen)
+  Gen.map f (Gen.pair label_gen node_gen)
 
 (* TODO:  how to feed in known types?
 
@@ -110,7 +110,7 @@ let type_decl_gen available_types =
     let variant =
       map
         (fun (l, t) -> ({ n = l; pos = null_pos }, { n = t; pos = null_pos }))
-        (pair label arg)
+        (pair label_gen arg)
     in
     small_list variant
   in
@@ -149,7 +149,7 @@ let val_bind_gen available_types =
       Val_bind ( { n = name; pos = null_pos }
                , body)
     )
-    (pair label (small_list available_type_nodes))
+    (pair label_gen (small_list available_type_nodes))
 
 let sig_gen =
   let open Fcm.Core in
