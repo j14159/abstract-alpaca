@@ -17,7 +17,7 @@ let test_simple_sig_elab =
         let vars, typ, _env = elab_type_expr (Fcm.Env.make ()) s in
         assert_equal ["t", "v_0"] vars;
         assert_equal
-          (TLarge (TAbs ( Exi ("v_0", KType)
+          (TLarge (TL_arrow (Impure, TAbs ( Exi ("v_0", KType))
                         , TSig
                             (Open
                                { fields = [("t", TLarge (TTyp "v_0"))]
@@ -26,6 +26,7 @@ let test_simple_sig_elab =
                      ))
              )
           )
+          
           typ
           ~printer:[%derive.show: Fcm.Typing.typ]
       )
@@ -61,22 +62,32 @@ let test_simple_sig_elab =
 
         assert_equal
           (TLarge
-             (TAbs ( Exi ("v_0", KType)
-                   , TAbs ( Exi ("v_1", KType)
-                          , TSig
-                              (Open
-                                 { fields = [ ("t", TLarge (TTyp "v_0"))
-                                            ; ("u"
-                                              ,  TLarge
-                                                   (TL_arrow ( Pure
-                                                             , TSmol (TVar "v")
-                                                             , (TTyp "v_1")))
-                                              )
-                                            ]
-                                 ; var = None
-                                 }
-                              )
-                       )
+             (TL_arrow
+                ( Impure
+                , TAbs ( Exi ("v_0", KType))
+                , TL_arrow
+                    ( Impure
+                    , TAbs ( Exi ("v_1", KType))
+                    , TSig
+                        (Open
+                           { fields = [ ("t", TLarge (TTyp "v_0"))
+                                      ; ("u"
+                                        ,  TLarge
+                                             (TL_arrow
+                                                ( Pure
+                                                , TSmol (TVar "v")
+                                                , TSkol
+                                                    ("v_1",
+                                                     [TLarge (TAbs (Uni ("v", KType)))]
+                                                    )
+                                                )
+                                             )
+                                        )
+                                      ]
+                           ; var = None
+                           }
+                        )
+                    )
                 )
              )
           )
@@ -87,12 +98,12 @@ let test_simple_sig_elab =
 
 let null_node x = { n = x; pos = null_pos }
 
+(* { type t } -> { val f : t -> t }
+   
+   Should elaborate to:
+   exi[X].{ t : [=X]} -> exi[X].{ f : [=X] -> [=X\ }
+ *)
 let test_functor _ =
-  (* { type t } -> { val f : t -> t }
-     
-     Should elaborate to:
-       exi[X].{ t : [=X]} -> exi[X].{ f : [=X] -> [=X\ }
-   *)
   let arg = { n = Signature [Opaque_type ({ n = "t"; pos = null_pos }, [])]
             ; pos = null_pos
             }
@@ -119,18 +130,19 @@ let test_functor _ =
   let sig2 = TSig (Open { var = None; fields = [("f", TLarge (TL_arrow (Impure, TTyp "v_0", TTyp "v_0")))] }) in
   let expected_res =
     TLarge
-      ( TAbs
-          ( Exi ("v_0", KType)
-          , TSig
-              ( Open
-                  { fields = [("f", TLarge
-                                      (TL_arrow ( Impure, sig1, sig2)))
-                             ]
-
-                  ; var = None
-                  }
-              )
-          )
+      (TL_arrow
+         ( Impure
+         , TAbs ( Exi ("v_0", KType))
+         , TSig
+             ( Open
+                 { fields = [("f", TLarge
+                                     (TL_arrow ( Impure, sig1, sig2)))
+                            ]
+                 
+                 ; var = None
+                 }
+             )
+         )
       )
   in
   assert_equal expected_res res ~printer:[%derive.show: Fcm.Typing.typ]
@@ -175,7 +187,7 @@ let test_functor_and_function _ =
                                 ; fields = [ "f", TLarge expected_f
                                            ; "g", TSmall expected_g] })
   in
-  let expected = TLarge (TAbs (Exi ("v_0", KType), expected_sig)) in
+  let expected = TLarge (TL_arrow (Impure, TAbs (Exi ("v_0", KType)), expected_sig)) in
 
   let np_sig ds = te_sig ds null_pos in
   let core_sig =
@@ -196,11 +208,26 @@ let test_functor_and_function _ =
   let _, res, _ = elab_type_expr (Fcm.Env.make ()) core_sig in
   assert_equal expected res ~printer:[%derive.show: typ]
 
+let test_large_type_apply _ =
+  let typ = Opaque_type (null_node "t", [null_node (Var "a")]) in
+  let fail1 = Transparent_type
+                ( type_const (null_node "u") []
+                , null_node
+                    (TE_Apply
+                       ( null_node "t"
+                       , [te_sig [Opaque_type (null_node "v", [])] null_pos])))
+  in
+  let fail_sig_1 = te_sig [typ; fail1] null_pos in
+  assert_raises
+    (Predicativity_violation null_pos)
+    (fun _ -> elab_type_expr (Fcm.Env.make ()) fail_sig_1)
+
 let suite =
   "Basic elaboration tests" >:::
     test_simple_sig_elab @
       [ "Simple functor type" >:: test_functor
       ; "Functor and function in signature" >:: test_functor_and_function
+      ; "Type application with large types must fail" >:: test_large_type_apply
       ]
 
 let _ =

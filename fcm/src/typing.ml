@@ -5,6 +5,11 @@
 *)
 open Core
 
+(* Raised when substitution of large types for small is attempted.
+   E.g. when a signature/module is provided in place of a type variable.
+ *)
+exception Predicativity_violation of pos
+
 type row_label = string
 [@@deriving show]
 
@@ -62,11 +67,11 @@ and large_typ =
      TODO:  should this maintain the mapping of original type names to
             synthesized existential names?
    *)
-  | TAbs of var * large_typ
+  | TAbs of var
   | TSmol of small_typ
   | TApp of typ * typ
   (* To support applicative/pure functors:  *)
-  | TSkol of var_name * large_typ
+  | TSkol of var_name * (typ list)
   | TRow of typ row
   | TL_arrow of eff * large_typ * large_typ
   (* A signature _should_ only abstract with existentials, whereas functors can
@@ -94,7 +99,7 @@ let perform_type_apply constructor args =
 let bind_from_sig t env =
   let rec lf e =
     match e with
-    | TAbs (_, other) -> lf other
+    | TL_arrow (_, TAbs _, other) -> lf other
     | (TSig (Open { fields; _ }))->
        List.fold_left (fun e (n, t) -> Env.bind (Local n) t e) env fields
     | _ -> env
@@ -107,11 +112,16 @@ let rec elab_type_expr env te =
   let vs, res, env = internal_elab env te in
   match res with
   | TLarge l ->
-     let res = List.fold_right (fun (_n, v) acc -> TAbs (Exi (v, KType), acc)) vs l in
+     let res = List.fold_right
+                 (fun (_n, v) acc -> TL_arrow (Impure, TAbs (Exi (v, KType)), acc))
+                 vs
+                 l
+     in
      vs, TLarge res, env
   | TSmall s when List.length vs = 0 ->
      vs, TSmall s, env
   | TSmall s ->
+     (* TODO:  this is wrong.  The problem is abstraction, not arrows.  *)
      failwith ("Small types cannot introduce types/type variables:  " ^ ([%derive.show: small_typ] s))
 
 (* Elaborate without enclosing in existential abstraction.  *)
@@ -123,7 +133,7 @@ and internal_elab env te =
      [], TSmall (TBase TUnit), env
   | { n = Var v; _ } ->
      [], TSmall (TVar v), env
-  | { n = TE_Apply ({ n; _ }, args); _ } ->
+  | { n = TE_Apply ({ n; _ }, args); pos } ->
      let f = match Env.local n env with
        | Some (TLarge f) -> f
        | Some (TSmall _) -> failwith "Small types can't be type constructors."
@@ -138,7 +148,7 @@ and internal_elab env te =
      let elab_and_check_small t_expr =
        match internal_elab env t_expr with
        | [], ((TSmall _) as x), e when e = env -> x
-       | _ -> failwith "Type constructor predicativity violation."
+       | _ -> raise (Predicativity_violation pos)
      in
      let elab_args = List.map elab_and_check_small args in
      [], perform_type_apply f elab_args, env
@@ -174,40 +184,55 @@ and elab_sig env s =
      interpreter, gluing concepts together a bit better.
    *)
   let hoist_vars (acc_vs, acc_elabs, env) next =
+    (* Elaborate each of the constructor's parameters, collect all variable
+       names for possible skolemization, return a tuple of name, constructor
+       variable names, and the list of elaborated expressions.
+     *)
+    let elab_constructor ({ n = name; _ }, t_exprs) env =
+      (* This throws away the environment after elaborating because the
+         elaboration of type variables should have no side effect.
+
+         Type variables become universals.
+       *)
+      let (vs, elabs) = List.fold_left
+                          (fun (vs, elabs) next ->
+                            match internal_elab env next with
+                            | [], TSmall (TVar v), e when e = env ->
+                               (* TODO:  I think TVar should take a var.... *)
+                               let vs = (Uni (v, KType)) :: vs in
+                               let elabs = TSmol (TVar v) :: elabs in
+                               vs, elabs
+                            |_ ->
+                              failwith "Only type variables allowed as opaque type args"
+                          )
+                          ([], [])
+                          t_exprs
+      in
+      name, vs, elabs
+    in
     let (new_vs, after_elab, env2) = match next with
       (* TODO:  positions *)
-      | Opaque_type ({ n = name; _ }, t_exprs) ->
+      | Opaque_type c ->
          let exi_var, env2 = Env.next_var env in
-         (* This throws away the environment after elaborating because the
-            elaboration of type variables should have no side effect.
-          *)
-         let map_elab te f =
-           match internal_elab env2 te with
-           | [], TSmall (TVar v), e when e = env2 -> f v
-           | _ -> failwith "Only type variables allowed as opaque type args"
+         let name, unis, args = elab_constructor c env2 in
+         let elab = if List.length args = 0 then
+                     TTyp exi_var
+                   else
+                     let seed = TSkol (exi_var, List.map (fun x -> TLarge (TAbs x)) unis) in
+                     let f n acc =
+                       TL_arrow (Pure, n, acc)
+                     in
+                     List.fold_right f args seed
          in
-         (* t_exprs can contain references to other structure elements.  *)
-         let f acc next =
-           map_elab next (fun v -> TL_arrow (Pure, TSmol (TVar v), acc))
-         in
-         begin
-           match (List.rev t_exprs) with
-           | [] ->
-              [name, exi_var], (name, TLarge (TTyp exi_var)), env2
-           | xs ->
-              let elab = TLarge (List.fold_left f (TTyp exi_var) xs) in
-              (* TODO:  this is wrong, needs to be a map from synthesized var
-                        name to `var` type, use name to link to that map.
-               *)
-              [name, exi_var], (name, elab), Env.bind (Local name) elab env2
-         end
-
-    | Transparent_type (_constr, _t_expr) ->
-       failwith "No signature transparent type support yet."
-    | Transparent_variants ((_name, _args), _vs) ->
-       failwith "No signature variants typing support yet."
-    | Val_bind ({ n; _}, t_expr) ->
-       (* Value bindings can both describe functors and close over types defined
+         let elab = TLarge elab in
+         [name, exi_var], (name, elab), Env.bind (Local name) elab env2
+      | Transparent_type (_constr, _t_expr) ->
+         (* contructor introduces variables.  Track here?  *)
+         failwith "No signature transparent type support yet."
+      | Transparent_variants ((_name, _args), _vs) ->
+         failwith "No signature variants typing support yet."
+      | Val_bind ({ n; _}, t_expr) ->
+         (* Value bindings can both describe functors and close over types defined
           in their enclosing module.  This means that they may introduce new
           existentials that depend on other existentials within the module.
           For the sake of simplicity, the existentials types introduced by a
@@ -219,9 +244,6 @@ and elab_sig env s =
     (acc_vs @ new_vs), (after_elab :: acc_elabs), env2
   in
   let all_vs, all_elabs, _env = List.fold_left hoist_vars ([], [], env) s in
-  (* OLD:
-     let vars = List.map (fun (n, v) -> (n, Exi (v, KType))) all_vs in
-   *)
   (* A signature has an unspecified row variable.
      TODO:  this should probably be an existential?  Good enough
      to be empty, assume exi?
