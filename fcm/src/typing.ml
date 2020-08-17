@@ -226,9 +226,18 @@ and elab_sig env s =
          in
          let elab = TLarge elab in
          [name, exi_var], (name, elab), Env.bind (Local name) elab env2
-      | Transparent_type (_constr, _t_expr) ->
-         (* contructor introduces variables.  Track here?  *)
-         failwith "No signature transparent type support yet."
+      | Transparent_type (constr, t_expr) ->
+         (* Universals ignored because we don't need to skolemize for a
+            transparent type.
+          *)
+         let name, _unis, args = elab_constructor constr env in
+         let vs, res, env2 = internal_elab env t_expr in
+         let res = match res with
+           | TSmall s -> TSmol s
+           | TLarge l -> l
+         in
+         let elab = TLarge (List.fold_right (fun n acc -> TL_arrow (Pure, n, acc)) args res) in
+         vs, (name, elab), Env.bind (Local name) elab env2
       | Transparent_variants ((_name, _args), _vs) ->
          failwith "No signature variants typing support yet."
       | Val_bind ({ n; _}, t_expr) ->

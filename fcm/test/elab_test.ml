@@ -222,12 +222,29 @@ let test_large_type_apply _ =
     (Predicativity_violation null_pos)
     (fun _ -> elab_type_expr (Fcm.Env.make ()) fail_sig_1)
 
+(* Test a transparent type's usage of an opaque type, within the same signature.
+
+   { type t 'a
+     type u 'b = t 'b
+   }
+
+   Should elaborate to:
+
+   abs[exi(v_0)].{ t : uni(v_1) -> exi(v_0)(v_1)
+                   u : uni(v_2) -> (t v_2)
+                 }
+
+ *)
+let test_transparent_and_opaque_type _ =
+  failwith "Unimplemented."
+
 let suite =
   "Basic elaboration tests" >:::
     test_simple_sig_elab @
       [ "Simple functor type" >:: test_functor
       ; "Functor and function in signature" >:: test_functor_and_function
       ; "Type application with large types must fail" >:: test_large_type_apply
+      ; "Transparent type using a local opaque type." >:: test_transparent_and_opaque_type
       ]
 
 let _ =
