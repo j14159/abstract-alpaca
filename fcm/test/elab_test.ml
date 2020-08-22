@@ -236,7 +236,34 @@ let test_large_type_apply _ =
 
  *)
 let test_transparent_and_opaque_type _ =
-  failwith "Unimplemented."
+  let to_elab =
+    let t = Opaque_type (null_node "t", [null_node (Var "a")]) in
+    let u = Transparent_type
+              ( (null_node "u", [null_node (Var "b")])
+              , null_node (TE_Apply ((null_node "t"), [null_node (Var "b")]))
+              )
+    in
+    te_sig [t; u] null_pos
+  in
+  let expected =
+    TLarge
+      (TL_arrow
+         ( Pure
+         , TAbs (Exi ("v_0", KType))
+         , TL_arrow
+             ( Pure
+             , TAbs (Exi ("v_1", KType))
+             , TSig
+                 ( Open { var = None
+                        ; fields = []
+                 })
+             )
+         )
+      )
+  in
+  let vs, res, _ = elab_type_expr (Fcm.Env.make ()) to_elab in
+  assert_equal 0 (List.length vs) ~printer:string_of_int;
+  assert_equal expected res ~printer:[%derive.show: typ]
 
 let suite =
   "Basic elaboration tests" >:::
