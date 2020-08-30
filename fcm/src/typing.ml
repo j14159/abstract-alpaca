@@ -75,7 +75,6 @@ and small_typ =
 and large_typ =
   | TTyp of var_name
   | TSmol of small_typ
-  | TApp of ftyp * ftyp
   | TSkol of var_name * (fexp node list)
   | TRow of ftyp row
   | TL_arrow of eff * large_typ * large_typ
@@ -83,6 +82,7 @@ and large_typ =
 [@@deriving show]
 
 and ftyp =
+  | TApp of fexp node * fexp node
   | TVar of var_name
   | TBase of base_typ
   | TNamed of ident
@@ -136,10 +136,10 @@ and internal_elab env te =
        | ({ pos; _ } as x) :: xs ->
           let _, x, _ = internal_elab env x in
           let rem = f xs in
-          { n = App_F (x, rem); pos }
+          { n = Typ_F (TApp (x, rem)); pos }
        | [] -> failwith "Unreachable base case, empty apply."
      in
-     [], { n = App_F (base, f args); pos }, env
+     [], { n = Typ_F (TApp (base, f args)); pos }, env
   | { n = TE_Arrow (a, b); pos } ->
      let vs1, elab_a, env2 = internal_elab env a in
      let vs2, elab_b, env3 = internal_elab env2 b in
@@ -147,8 +147,9 @@ and internal_elab env te =
        match elab_a, elab_b with
        | { n = Typ_F _; _ }, { n = Typ_F _; _ } ->
           vs1 @ vs2, { n = Typ_F (Arrow_F (Impure, elab_a, elab_b)); pos }, env3
-       | { pos; _ }, _ ->
-          failwith ("Could not elaborate to F-omega term:  " ^ ([%derive.show: pos] pos))
+       | aa, bb ->
+          let p = [%derive.show: fexp node] in
+          failwith ("Could not elaborate to F-omega term:  " ^ (p aa) ^ " " ^ (p bb))
      end
   | { n = Signature  decls; pos } ->
      elab_sig env decls pos
@@ -264,7 +265,7 @@ and elab_sig env s sig_pos =
          let vs, res, env2 = internal_elab env t_expr in
          begin
            let body = match res with
-             | { n = Typ_F TNamed (Flat _); _ } as x -> x
+             | { n = Typ_F _; _ } as x -> x
              | { n = App_F _; _ } as x -> x
              | other ->
                 (* TODO:  proper elaboration expression.  *)

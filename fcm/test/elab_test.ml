@@ -17,6 +17,7 @@ let tnamed n = null_node (Typ_F (TNamed (Flat n)))
 let tarrow eff x y = null_node (Typ_F (Arrow_F (eff, x, y)))
 let tsig fs = null_node (Typ_F (TLarge (TSig ( Open { fields = fs; var = None }))))
 let tabs v e = Abs_FT (v, e)
+let tapp x y = null_node (Typ_F (TApp (x, y)))
 let tskol a vs = null_node (Typ_F (TLarge (TSkol (a, vs))))
 let uni n k = Uni (n, k)
 let exi n k = Exi (n, k)
@@ -216,11 +217,24 @@ let test_transparent_and_opaque_type _ =
     abs
       (exi "v_0" KType)
       (tsig [ "t", abs (uni "a" KType) (tskol "v_0" [tnamed "a"])
-            ; "u", abs (uni "b" KType) (app (ident "t") (ident "b"))
+            ; "u", abs (uni "b" KType) (tapp (ident "t") (ident "b"))
       ])
   in
   let res, _ = elab_type_expr (Fcm.Env.make ()) to_elab in
   assert_fexp_eq expected res
+
+let property_sig_elab_test =
+  let open QCheck in
+  QCheck.Test.make
+    ~count:100
+    ~name:"Property-based signature elaborations"
+    (make ~print:[%derive.show: expr] Ast_gen.sig_gen)
+    (fun x ->
+      match x with
+      | Type t ->
+         let _, _ = elab_type_expr (Fcm.Env.make ()) t in true
+      | _ -> false
+    )
 
 let suite =
   "Basic elaboration tests" >:::
@@ -233,6 +247,7 @@ let suite =
       ; "Type application with large types must fail" >:: test_large_type_apply
        *)
       ; "Transparent type using a local opaque type." >:: test_transparent_and_opaque_type
+      ; QCheck_ounit.to_ounit2_test property_sig_elab_test
       ]
 
 let _ =

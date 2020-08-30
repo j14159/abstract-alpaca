@@ -87,7 +87,7 @@ let type_decl_gen available_types =
   let opaque_gen =
     map (fun (name, args) -> Opaque_type (name, args)) (gen_label_and_nodes arg_list)
   in
-  let variant_gen vars =
+  let _variant_gen vars =
     (* TODO:  variants that take unit stand in for nullary variants here but
               I'm not sure that's good enough.
      *)
@@ -113,10 +113,13 @@ let type_decl_gen available_types =
     >>=
       (fun (name, args) ->
         let non_node_args = (List.map (fun { n; _ } -> n) args) in
-        oneof [ map
+        oneof [ (* Removing variants until I've thought through how to elaborate
+                   them into F-omega.
+
+                   map
                    (fun vs -> Transparent_variants ((name, args), vs))
                    (variant_gen non_node_args)
-               ; map
+               ; *)map
                    (fun t -> Transparent_type ((name, args), { n = t; pos = null_pos }))
                    (available_gen [] non_node_args)
           ]
