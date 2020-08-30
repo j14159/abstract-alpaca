@@ -23,7 +23,7 @@ and type_expr =
   | TE_Unit
   | TE_Bool
   | TE_Arrow of type_expr node * type_expr node
-  | Var of string
+  | TE_Var of string
   | Named of string
   (* e.g. applying `type list 'x` (a functor) in `list int`
 
@@ -83,7 +83,7 @@ let rec check_type_expr e =
      Result.ok ()
   | { n = TE_Arrow (a, b); _ } ->
      Result.bind (check_type_expr a) (fun _ -> check_type_expr b)
-  | { n = Var _; _ } ->
+  | { n = TE_Var _; _ } ->
      Result.ok ()
   | { n = Named _; _ } ->
      Result.ok ()
@@ -105,7 +105,7 @@ and check_sig_declaration d =
       prev
       (fun _ ->
         match next with
-        | { n = Var _; _ } ->
+        | { n = TE_Var _; _ } ->
            Result.ok ()
         | { pos; _ } ->
            Result.error (pos, "Only variables allowed in an opaque type.")

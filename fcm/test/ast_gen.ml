@@ -24,7 +24,7 @@ let label_gen =
   Gen.map (fun (a, b) -> Core.String.of_char_list (a :: b)) chars
 
 let var_gen =
-  Gen.map (fun l -> Fcm.Core.Var ("'" ^ l) ) label_gen
+  Gen.map (fun l -> Fcm.Core.TE_Var ("'" ^ l) ) label_gen
 
 (* Generate a label, e.g. a function name or type constructor name, followed
    by a list of nodes like type variables, types, etc.
@@ -33,23 +33,14 @@ let gen_label_and_nodes node_gen =
   let open Fcm.Core in
   let f (name, nodes) =
     let label = { n = name; pos = null_pos } in
-    let init_offset = (String.length name) + 1 in
-    (* TODO:  This is trying to be cute about positions and getting it wrong.
-
-       Does not account for multiline returns from formatting, nor line numbers
-       at all.
-     *)
-    let _, nodes' = List.fold_right
-                      (fun t_expr (offset, vs) ->
-                        let node = Type { n = t_expr; pos = null_pos} in
-                        let len = String.length (snd @@ Fcm.Format.format node width) in
-                        len + offset + 1, (* +1 for whitespace *)
+    let nodes' = List.fold_right
+                      (fun t_expr vs ->
                         { n = t_expr
-                        ; pos = { null_pos with col = offset }
+                        ; pos = null_pos
                         } :: vs
                       )
                       nodes
-                      (init_offset, [])
+                      []
     in
     label, nodes'
   in

@@ -26,6 +26,10 @@ type var =
   | Exi of var_name * kind
 [@@deriving show]
 
+let var_kind = function
+  | Uni (_, k) -> k
+  | Exi (_, k) -> k
+
 type eff =
   | Pure
   | Impure
@@ -44,17 +48,31 @@ type base_typ =
   | TBool
 [@@deriving show]
 
+type ('arg, 'arg_typ) abs = { arg : 'arg; arg_typ : 'arg_typ; body : fexp node }
+
+and ident =
+  | Dot of fexp node * fexp node
+  | Flat of var_name
+
+(* System F-Omega expressions.  *)
+and fexp =
+  (* Forcing arguments to be effectively only labels.  This is probably OK iff
+     future patterns are elaborated before elaboration into F-omega.
+   *)
+  | Ident_F of ident
+  | Lam_F of (fexp node, ftyp option) abs
+  | Abs_F of var * fexp node
+  (* Skolemization for type constructors.  *)
+  | Skol_F of var_name * kind * (ftyp list)
+  | App_F of fexp node * fexp node
+  | Typ_F of ftyp
+  | Record_F of fexp row
 (* I'm not sure if this separation is right.
 
    TODO:  needs links to source AST (core.ml).  Maybe mark "regions" of types
           with core AST nodes.
  *)
-type small_typ =
-  (* Don't permit a variable to be inhabited by a large type.  Section 2 of [1],
-     "Predicativity", page 14.
-   *)
-  | TVar of string
-  | TBase of base_typ
+and small_typ =
   | TRecord of small_typ row
   | TArrow of small_typ * small_typ
 [@@deriving show]
@@ -67,20 +85,25 @@ and large_typ =
      TODO:  should this maintain the mapping of original type names to
             synthesized existential names?
    *)
-  | TAbs of var
   | TSmol of small_typ
-  | TApp of typ * typ
+  | TApp of ftyp * ftyp
   (* To support applicative/pure functors:  *)
-  | TSkol of var_name * (typ list)
-  | TRow of typ row
+  | TSkol of var_name * (fexp node list)
+  | TRow of ftyp row
   | TL_arrow of eff * large_typ * large_typ
   (* A signature _should_ only abstract with existentials, whereas functors can
      abstract with both existential and universal variables.
    *)
-  | TSig of typ row
+  | TSig of fexp node row
 [@@deriving show]
 
-and typ =
+and ftyp =
+  | TVar of var_name
+  | TBase of base_typ
+  | TNamed of ident
+  (* FIXME:  I'm mixing names with large_typ and what should really be an expression type.  *)
+  | Abs_FT of var * ftyp
+  | Arrow_F of eff * fexp node * fexp node
   | TSmall of small_typ
   | TLarge of large_typ
 [@@deriving show]
@@ -95,85 +118,75 @@ let perform_type_apply constructor args =
   in
   f constructor args
 
-(* If the given type is a signature, bind its types in the environment given.  *)
-let bind_from_sig t env =
-  let rec lf e =
-    match e with
-    | TL_arrow (_, TAbs _, other) -> lf other
-    | (TSig (Open { fields; _ }))->
-       List.fold_left (fun e (n, t) -> Env.bind (Local n) t e) env fields
-    | _ -> env
-  in
-  match t with
-  | TLarge l -> lf l
-  | _other ->   env
-
 let rec elab_type_expr env te =
+  (* `vs` must be `(string, var) list`  *)
   let vs, res, env = internal_elab env te in
-  match res with
-  | TLarge l ->
-     let res = List.fold_right
-                 (fun (_n, v) acc -> TL_arrow (Impure, TAbs (Exi (v, KType)), acc))
-                 vs
-                 l
-     in
-     vs, TLarge res, env
-  | TSmall s when List.length vs = 0 ->
-     vs, TSmall s, env
-  | TSmall s ->
-     (* TODO:  this is wrong.  The problem is abstraction, not arrows.  *)
-     failwith ("Small types cannot introduce types/type variables:  " ^ ([%derive.show: small_typ] s))
+  if List.length vs = 0 then
+    res, env
+  else
+    let f (_name, var) acc =
+      (* TODO:  I'm using the position for the whole type expression here but
+                should be using the position for each argument.
+       *)
+      (* Abs_FT (var, acc) *)
+      Abs_F (var, { n = acc; pos = te.pos })
+    in
+    match res with
+    | { n = Typ_F res; _ } ->
+       let res = List.fold_right f vs (Typ_F res) in
+    (* { n = Typ_F res; pos = te.pos }, env *)
+       { n = res; pos = te.pos }, env
+    | _ ->
+       failwith "Unreachable base case, elab_type_expr should have returned a ftyp"
+
+(* Just trying this out.  *)
+and (>>-) { n; pos } f = { n = f n; pos }
 
 (* Elaborate without enclosing in existential abstraction.  *)
 and internal_elab env te =
   match te with
-  | { n = TE_Bool; _ } ->
-     [], TSmall (TBase TBool), env
-  | { n = TE_Unit; _ } ->
-     [], TSmall (TBase TUnit), env
-  | { n = Var v; _ } ->
-     [], TSmall (TVar v), env
-  | { n = TE_Apply ({ n; _ }, args); pos } ->
-     let f = match Env.local n env with
-       | Some (TLarge f) -> f
-       | Some (TSmall _) -> failwith "Small types can't be type constructors."
-       | None -> failwith (n ^ " not in scope")
+  | { n = TE_Bool; pos } ->
+     [], { n = Typ_F (TBase TBool); pos }, env
+  | { n = TE_Unit; pos } ->
+     [], { n = Typ_F (TBase TUnit); pos }, env
+  | { n = TE_Var v; pos } ->
+     (* This is a reference to a var, not an abstraction.  *)
+     [], { n = Ident_F (Flat v); pos }, env
+  | { n = TE_Apply ({ n; _ }, []); pos } ->
+     [], { n = Typ_F (TNamed (Flat n)); pos }, env
+  | { n = TE_Apply (n, args); pos } ->
+     (* No checking here, just elaborate.  *)
+     let base = n >>- (fun l -> Ident_F (Flat l)) in
+     let rec f = function
+       | [x] ->
+          let _, x, _ = internal_elab env x in
+          x
+       | ({ pos; _ } as x) :: xs ->
+          let _, x, _ = internal_elab env x in
+          let rem = f xs in
+          { n = App_F (x, rem); pos }
+       | [] -> failwith "Unreachable base case, empty apply."
      in
-     (* Each argument must be expanded to a _small_ type (predicativity).
-        Since only small types are allowed, we aren't expanding the environment's
-        bindings, nor are we creating new universal or existential variables.
-        As a result, only non-side-effecting elaborations are allowed, and we
-        don't need to mutate the environment.
-      *)
-     let elab_and_check_small t_expr =
-       match internal_elab env t_expr with
-       | [], ((TSmall _) as x), e when e = env -> x
-       | _ -> raise (Predicativity_violation pos)
-     in
-     let elab_args = List.map elab_and_check_small args in
-     [], perform_type_apply f elab_args, env
-  | { n = TE_Arrow (a, b); _ } ->
+     [], { n = App_F (base, f args); pos }, env
+  | { n = TE_Arrow (a, b); pos } ->
      let vs1, elab_a, env2 = internal_elab env a in
-     (* Types explicit in elab_a should be available to b.  *)
-     let env2 = bind_from_sig elab_a env2 in
      let vs2, elab_b, env3 = internal_elab env2 b in
-     let arr = match elab_a, elab_b with
-       (* Assume impure for now until syntax expands to allow pure.  *)
-       | TLarge a, TLarge b -> TLarge (TL_arrow (Impure, a, b))
-       | TLarge a, TSmall b -> TLarge (TL_arrow (Impure, a, TSmol b))
-       | TSmall a, TSmall b -> TSmall (TArrow (a, b))
-       | _ -> failwith "Unsupported arrow type expression."
-     in
-     vs1 @ vs2, arr, env3
-  | { n = Signature  decls; _ } ->
-     elab_sig env decls
+     begin
+       match elab_a, elab_b with
+       | { n = Typ_F _; _ }, { n = Typ_F _; _ } ->
+          vs1 @ vs2, { n = Typ_F (Arrow_F (Impure, elab_a, elab_b)); pos }, env3
+       | { pos; _ }, _ ->
+          failwith ("Could not elaborate to F-omega term:  " ^ ([%derive.show: pos] pos))
+     end
+  | { n = Signature  decls; pos } ->
+     elab_sig env decls pos
   | _ ->
      failwith "Cannot yet elaborate this type."
-    
+
 (* Any internal dependency between nested signature elements needs to have an
    existential hoisted out to the outer level.
  *)
-and elab_sig env s =
+and elab_sig env s sig_pos =
   (* Not the best name for this function but basically does two things at the
      same time:
        1. Turn opaque types into existential variables for the signature.
@@ -184,6 +197,26 @@ and elab_sig env s =
      interpreter, gluing concepts together a bit better.
    *)
   let hoist_vars (acc_vs, acc_elabs, env) next =
+    let make_abstraction args unis body =
+      let f n acc =
+        (* TODO:  positions?  *)
+        match n with
+        (* TODO:  Ident_F instead.   *)
+        | { n = Ident_F (Flat x); pos } ->
+           (* TODO:  real failure, not from List.assoc.  *)
+           let { n = v; _ } = List.assoc x unis in
+           { n = Abs_F (v, acc); pos }
+        | { n; pos } ->
+           (* TODO:  be less lazy and make a real exception.  *)
+           failwith ( "Can't make a type constructor argument with "
+                      ^ ([%derive.show: fexp] n)
+                      ^ " at position "
+                      ^ ([%derive.show: pos] pos)
+             )
+      in
+      List.fold_right f args body
+    in
+
     (* Elaborate each of the constructor's parameters, collect all variable
        names for possible skolemization, return a tuple of name, constructor
        variable names, and the list of elaborated expressions.
@@ -197,13 +230,16 @@ and elab_sig env s =
       let (vs, elabs) = List.fold_left
                           (fun (vs, elabs) next ->
                             match internal_elab env next with
-                            | [], TSmall (TVar v), e when e = env ->
-                               (* TODO:  I think TVar should take a var.... *)
-                               let vs = (Uni (v, KType)) :: vs in
-                               let elabs = TSmol (TVar v) :: elabs in
+                            | [], ({ n = Ident_F (Flat v); pos } as x), e when e = env ->
+                               let vs = (v, { n = Uni (v, KType); pos }) :: vs in
+                               let elabs = x :: elabs in
                                vs, elabs
-                            |_ ->
-                              failwith "Only type variables allowed as opaque type args"
+                            | _, { pos; _ }, _ ->
+                               (* TODO:  real exception.  *)
+                               failwith
+                                 ("Elaboration failed, Only type variables allowed as constructor args"
+                                  ^ ([%derive.show: pos] pos)
+                                 )
                           )
                           ([], [])
                           t_exprs
@@ -211,33 +247,57 @@ and elab_sig env s =
       name, vs, elabs
     in
     let (new_vs, after_elab, env2) = match next with
-      (* TODO:  positions *)
+      (* Must be transparently equivalent to the existential qualified with
+         (or applied to - skolem function?) the additional present arguments
+         or variables.
+       *)
       | Opaque_type c ->
          let exi_var, env2 = Env.next_var env in
+         (* Make Abs_TF from `unis`, Lam_F from `args`.  *)
          let name, unis, args = elab_constructor c env2 in
          let elab = if List.length args = 0 then
-                     TTyp exi_var
-                   else
-                     let seed = TSkol (exi_var, List.map (fun x -> TLarge (TAbs x)) unis) in
-                     let f n acc =
-                       TL_arrow (Pure, n, acc)
-                     in
-                     List.fold_right f args seed
+                      let ({ pos; _ }, _) = c in
+                      { n = Typ_F (TNamed (Flat exi_var)); pos }
+                    else
+                      let seed = TLarge
+                                   (TSkol
+                                      ( exi_var
+                                      , List.map
+                                          (fun (x, { pos; _ }) ->
+                                            { n = Typ_F (TNamed (Flat x)); pos }
+                                          )
+                                          unis
+                                      )
+                                   )
+                      in
+                      let ({ pos; _ }, _) = c in
+                      make_abstraction args unis { n = Typ_F seed; pos }
          in
-         let elab = TLarge elab in
-         [name, exi_var], (name, elab), Env.bind (Local name) elab env2
+         (*let elab = { n = elab; pos = (fst c).pos } in*)
+         [name, Exi (exi_var, KType)], (name, elab), Env.bind (Local name) elab.n env2
       | Transparent_type (constr, t_expr) ->
-         (* Universals ignored because we don't need to skolemize for a
-            transparent type.
+         (* The definition of a type constructor can only have variables as
+            arguments.
+
+            FIXME:  elab_constructor will fail internally if an argument is not
+                    a type variable.  This feels opaque and bad maybe?
           *)
-         let name, _unis, args = elab_constructor constr env in
+         let name, unis, args = elab_constructor constr env in
          let vs, res, env2 = internal_elab env t_expr in
-         let res = match res with
-           | TSmall s -> TSmol s
-           | TLarge l -> l
-         in
-         let elab = TLarge (List.fold_right (fun n acc -> TL_arrow (Pure, n, acc)) args res) in
-         vs, (name, elab), Env.bind (Local name) elab env2
+         (* TODO:  unis becomes a chain of Abs_F if empty, otherwise the name
+                   simply equates to `res`.
+          *)
+         begin
+           let body = match res with
+             | { n = Typ_F TNamed (Flat _); _ } as x -> x
+             | { n = App_F _; _ } as x -> x
+             | other ->
+                (* TODO:  proper elaboration expression.  *)
+                failwith ("Can't use " ^ ([%derive.show: fexp node] other) ^ " for type body")
+           in
+           let elab = make_abstraction args unis body in
+            vs, (name, elab), Env.bind (Local name) elab.n env2
+         end
       | Transparent_variants ((_name, _args), _vs) ->
          failwith "No signature variants typing support yet."
       | Val_bind ({ n; _}, t_expr) ->
@@ -246,9 +306,14 @@ and elab_sig env s =
           existentials that depend on other existentials within the module.
           For the sake of simplicity, the existentials types introduced by a
           value binding will thus be lifted out.
-        *)
-       let vs, elab, env2 = internal_elab env t_expr in
-       vs, (n, elab), env2
+          *)
+         begin
+           match internal_elab env t_expr with
+           | vs, ({ n = Typ_F _; _ } as elab), env2 ->
+              vs, (n, elab), env2
+           | _, other, _ ->
+              failwith ("Can't use " ^ ([%derive.show: fexp node] other) ^ " for val binding.")
+         end
     in
     (acc_vs @ new_vs), (after_elab :: acc_elabs), env2
   in
@@ -257,6 +322,6 @@ and elab_sig env s =
      TODO:  this should probably be an existential?  Good enough
      to be empty, assume exi?
    *)
-  
-  let s = TSig (Open { fields = (List.rev all_elabs); var = None }) in
-  all_vs, (TLarge s), env
+
+  let res = TSig (Open { fields = (List.rev all_elabs); var = None }) in
+  all_vs, { n = Typ_F (TLarge res); pos = sig_pos }, env
