@@ -6,6 +6,10 @@ open OUnit2
 let fexp_node_printer = [%derive.show: fexp node]
 let assert_fexp_eq = assert_equal ~printer:fexp_node_printer
 
+(* Convenience methods for the System F AST.  They're here as a sort of
+   prototyping/staging area and will move somewhere like src/typing.ml
+   later.
+ *)
 let null_node x = { n = x; pos = null_pos }
 let tbase b = null_node (Typ_F (TBase b))
 let tvar n = null_node (Typ_F (TVar n))
@@ -21,6 +25,7 @@ let abs var body = { n = Abs_F (var, body); pos = null_pos }
 let ident n = null_node (Ident_F (Flat n))
 let app a b = null_node (App_F (a, b))
 
+(* The very basic elaboration tests.  *)
 let test_simple_sig_elab =
   [ "Empty sig" >::
       (fun _ ->
@@ -53,16 +58,11 @@ let test_simple_sig_elab =
 
            Should elaborate to:
 
-           abs[v_0].abs[v_1].{ t : [=v_0]; u : 'v -> [=v_1] }
-
-           TODO:  since type definitions are pure (applicative) functors,
-                  should `u1 _actually_ elaborate to the following?
-
-                  u : 'v -> [='v.v_1]  -- skolemize?
+           exi[v_0].exi[v_1]{ t : [=v_0]; u : v -> [=v_1(v)] }
          *)
         (* Reusing from the previous test:  *)
         let t = Opaque_type ({ n = "t"; pos = null_pos }, []) in
-        (* This should elaborate to exi[v_1].type -> type *)
+        (* This should elaborate to uni[v].v_1(v) *)
         let u = Opaque_type
                   ( { n = "u"; pos = null_pos }
                   , [{n = TE_Var "v"; pos = null_pos }]
@@ -87,10 +87,11 @@ let test_simple_sig_elab =
       )
   ]
 
-(* { type t } -> { val f : t -> t }
+(*
+   { f : { type t } -> { val g : t -> t } }
 
    Should elaborate to:
-   exi[X].{ t : [=X]} -> exi[X].{ f : [=X] -> [=X\ }
+   exi[v_0].{ f : { t : [=v_0]} -> { f : [=v_0] -> [=v_0] } }
  *)
 let test_functor _ =
   let arg = { n = Signature [Opaque_type ({ n = "t"; pos = null_pos }, [])]
@@ -109,8 +110,8 @@ let test_functor _ =
              ; pos = null_pos
              }
   in
-  let f = TE_Arrow (arg, body) in
-  let d1 = Val_bind ({ n = "f"; pos = null_pos }, { n = f; pos = null_pos }) in
+  let g = TE_Arrow (arg, body) in
+  let d1 = Val_bind ({ n = "g"; pos = null_pos }, { n = g; pos = null_pos }) in
   let res, _ = elab_type_expr (Fcm.Env.make ()) { n = Signature [d1]; pos = null_pos } in
 
   let sig1 = tsig [("t", tnamed "v_0")] in
@@ -118,7 +119,7 @@ let test_functor _ =
   let expected_res =
     abs
       (exi "v_0" KType)
-      (tsig [("f", tarrow Impure sig1 sig2)])
+      (tsig [("g", tarrow Impure sig1 sig2)])
   in
   assert_fexp_eq expected_res res
 
@@ -132,10 +133,9 @@ let test_functor _ =
 
    Should elaborate to:
 
-   abs[exi(v_0)].{ val f : { t : [=v_0] } -> { val f : [=v_0] -> [=v_0] }
-                   val g : [=bool] -> [=unit]
-                 }
-
+   exi[v_0].{ val f : { t : [=v_0] } -> { val f : [=v_0] -> [=v_0] }
+              val g : [=bool] -> [=unit]
+            }
  *)
 let test_functor_and_function _ =
   let expected_f =
@@ -191,15 +191,15 @@ let test_large_type_apply _ =
 
 (* Test a transparent type's usage of an opaque type, within the same signature.
 
-   { type t 'a
-     type u 'b = t 'b
+   { type t a
+     type u b = t b
    }
 
    Should elaborate to:
 
-   abs[exi(v_0)].{ t : uni(v_1) -> v_0(v_1)
-                   u : uni(v_2) -> t(v_2)
-                 }
+   exi[v_0].{ t : uni[a].[=v_0(a)]
+              u : uni[b].[=t(b)]
+            }
 
  *)
 let test_transparent_and_opaque_type _ =
