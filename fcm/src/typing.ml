@@ -253,7 +253,7 @@ and elab_sig env s sig_pos =
                       let ({ pos; _ }, _) = c in
                       make_abstraction args unis { n = Typ_F body; pos }
          in
-         [name, Exi (exi_var, KType)], (name, elab), Env.bind (Local name) elab.n env2
+         [name, Exi (exi_var, KType)], (name, elab), env2
       | Transparent_type (constr, t_expr) ->
          (* The definition of a type constructor can only have variables as
             arguments.
@@ -272,7 +272,7 @@ and elab_sig env s sig_pos =
                 failwith ("Can't use " ^ ([%derive.show: fexp node] other) ^ " for type body")
            in
            let elab = make_abstraction args unis body in
-            vs, (name, elab), Env.bind (Local name) elab.n env2
+            vs, (name, elab), env2
          end
       | Transparent_variants ((_name, _args), _vs) ->
          failwith "No signature variants typing support yet."
