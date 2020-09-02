@@ -53,11 +53,14 @@ type term =
   | Unit
   | Label of string
   | Variant of label * term node
-  | Fun of term node * term node
+  | Fun of (term node * type_expr node option) * term node
   (* Field access, could be for a module, signature, or record:  *)
   | Dot of term node * label
   | Mod of bind list
-  | Pack of term node * term node
+  | Let of  { name : term node
+            ; ret_typ : type_expr node
+            ; body : term node
+            }
 [@@deriving show]
 
 (* Elements of a module expression (structure literal/expression).  *)
@@ -69,8 +72,6 @@ and bind =
 
 and expr =
   | Term of term node
-  (* Allows for annotation with variants, not good:  *)
-  | Ann_term of (term * type_expr) node
   | Type of type_expr node
 [@@deriving show]
 

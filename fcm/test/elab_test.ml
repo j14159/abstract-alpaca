@@ -1,3 +1,8 @@
+(* TODOs:
+
+     - Property tests to generate valid and invalid functions and elaborate them.
+ *)
+
 open Fcm.Core
 open Fcm.Typing
 
@@ -236,9 +241,24 @@ let property_sig_elab_test =
       | _ -> false
     )
 
+let valid_fun_gen_test =
+  let open QCheck in
+  QCheck.Test.make
+    ~count:100
+    ~name:"Property-based valid function elaborations"
+    (make ~print:[%derive.show: term node] Ast_gen.valid_fun_gen)
+    (fun x ->
+      match elab_expr (Fcm.Env.make ()) x with
+      | { n = Lam_F _; _ }, _ -> true
+      | _ -> false
+    )
+
+let term_gen_tests =
+  [QCheck_ounit.to_ounit2_test valid_fun_gen_test]
+
 let suite =
   "Basic elaboration tests" >:::
-    test_simple_sig_elab @
+    term_gen_tests @ test_simple_sig_elab @
       [ "Simple functor type" >:: test_functor
       ; "Functor and function in signature" >:: test_functor_and_function
       (* Disabling since predicativity checks are no longer part of elaboration.

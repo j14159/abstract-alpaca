@@ -57,7 +57,7 @@ and ident =
 (* System F-Omega expressions.  *)
 and fexp =
   | Ident_F of ident
-  | Lam_F of (fexp node, ftyp option) abs
+  | Lam_F of (fexp node, ftyp node) abs
   | Abs_F of var * fexp node
   | App_F of fexp node * fexp node
   | Typ_F of ftyp
@@ -82,6 +82,7 @@ and large_typ =
 [@@deriving show]
 
 and ftyp =
+  | TInfer
   | TApp of fexp node * fexp node
   | TVar of var_name
   | TBase of base_typ
@@ -301,3 +302,30 @@ and elab_sig env s sig_pos =
 
   let res = TSig (Open { fields = (List.rev all_elabs); var = None }) in
   all_vs, { n = Typ_F (TLarge res); pos = sig_pos }, env
+
+let unwrap_ftyp = function
+  | { n = Typ_F t; pos } -> { n = t; pos }
+  | { n = _; pos } -> failwith ("Expected type at "^ ([%derive.show: pos] pos))
+
+let rec elab_expr env e =
+  match e with
+  | { n = Label l; pos } ->
+     { n = Ident_F (Flat l); pos }, env
+  | { n = Core.Dot (x, { n; pos = lpos }); pos } ->
+     let x', env2 = elab_expr env x in
+     let dot = Dot (x', { n = Ident_F (Flat n); pos = lpos }) in
+     { n = Ident_F dot; pos }, env2
+  | { n = Fun ( (arg, argt), body ); pos } ->
+     let arg_typ, env2 =
+       Option.map (fun t -> elab_type_expr env t) argt
+       |> Option.value ~default:({ n = Typ_F TInfer; pos }, env)
+     in
+     let arg, env3 = elab_expr env2 arg in
+     let body, env4 = elab_expr env3 body in
+     { n = Lam_F { arg; arg_typ = unwrap_ftyp arg_typ; body }; pos }, env4
+  | _ -> failwith "Unsupported elab"
+
+let elab env e =
+  match e with
+  | Type t -> elab_type_expr env t
+  | Term t -> elab_expr env t

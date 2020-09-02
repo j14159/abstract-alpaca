@@ -23,7 +23,10 @@ let label_gen =
   let chars = Gen.pair first_valid rem_valid in
   Gen.map (fun (a, b) -> Core.String.of_char_list (a :: b)) chars
 
-let var_gen =
+(** { {0} Type Expression Generators }
+ *)
+
+let type_var_gen =
   Gen.map (fun l -> Fcm.Core.TE_Var ("'" ^ l) ) label_gen
 
 (* Generate a label, e.g. a function name or type constructor name, followed
@@ -46,19 +49,8 @@ let gen_label_and_nodes node_gen =
   in
   Gen.map f (Gen.pair label_gen node_gen)
 
-(* TODO:  how to feed in known types?
-
-   This could take input from a signature's preceding declarations or
-   environment.
+(* A generator to select between in-scope types and base (built-in) types.
  *)
-let type_apply_gen =
-  (* Not quite correct, could have access to more types from the preceding
-     definitions or import/open statements.
-   *)
-  let arg_list = Gen.small_list (Gen.oneof [var_gen; Gen.oneofl base_type]) in
-  let open Fcm.Core in
-  Gen.map (fun (name, args) -> TE_Apply (name, args)) (gen_label_and_nodes arg_list)
-
 let available_gen available_types vars =
   let open Fcm.Core in
   let open Gen in
@@ -76,14 +68,14 @@ let available_gen available_types vars =
   else
     oneofl base_type
 
-(* [ available_types ] is a list of {! Fcm.Core.type_constructor } instances.
-   TODO:
-   - Transparent gen.  Feed vars into definition.
+(* Signature type declaration generator.
+
+   [ available_types ] is a list of {! Fcm.Core.type_constructor } instances.
  *)
 let type_decl_gen available_types =
   let open Fcm.Core in
   let open Gen in
-  let arg_list = small_list var_gen in
+  let arg_list = small_list type_var_gen in
   let opaque_gen =
     map (fun (name, args) -> Opaque_type (name, args)) (gen_label_and_nodes arg_list)
   in
@@ -126,6 +118,8 @@ let type_decl_gen available_types =
       )
   in
   oneof [opaque_gen; transparent_gen]
+
+(* Value bindings in signatures.  *)
 let val_bind_gen available_types =
   let open Fcm.Core in
   let open Gen in
@@ -168,3 +162,30 @@ let sig_gen =
   map
     (fun ds -> Type ({ n = Signature ds; pos = null_pos }))
     (Gen.small_int >>= (fun c -> f [] [] c))
+
+(** { {0} Term generators }
+ *)
+
+(** Anonymous functions/lambdas.  *)
+
+(* TODO:
+   - For elaboration:
+     - Valid functions.
+     - Invalid functions.
+
+*)
+
+let valid_fun_gen =
+  let open Gen in
+  let open Fcm.Core in
+  let base_gen = opt (available_gen [] []) in
+  let p = pair (map (fun l -> Label l) label_gen) base_gen in
+  let f (arg, arg_type) =
+    (* TODO:  literals other than Unit.  *)
+    let body = map (fun b -> { n = b; pos = null_pos }) (oneofl [arg; Unit]) in
+    let arg' = { n = arg; pos = null_pos } in
+    let arg_type' = Option.map (fun x -> { n = x; pos = null_pos }) arg_type in
+    map (fun body -> { n = Fun ((arg', arg_type'), body); pos = null_pos }) body
+  in
+  p >>= f
+
