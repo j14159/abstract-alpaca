@@ -7,7 +7,9 @@ let null_pos = { uri = "file://dev/null"; col = 0; line = 0 }
 
 (* Allow for expression vs type expression nodes.
  *)
-type 'n node = { n : 'n; pos : pos }
+type 'n node = { n : 'n
+               ; pos : pos
+               }
 [@@deriving show]
 
 type label = string node
@@ -53,7 +55,7 @@ type term =
   | Unit
   | Label of string
   | Variant of label * term node
-  | Fun of (term node * type_expr node option) * term node
+  | Fun of (expr * type_expr node option) * expr
   (* Field access, could be for a module, signature, or record:  *)
   | Dot of term node * label
   | Mod of bind list

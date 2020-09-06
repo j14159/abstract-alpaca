@@ -56,6 +56,7 @@ and ident =
 
 (* System F-Omega expressions.  *)
 and fexp =
+  | Unit_F
   | Ident_F of ident
   | Lam_F of (fexp node, ftyp node) abs
   | Abs_F of var * fexp node
@@ -75,20 +76,20 @@ and small_typ =
 and large_typ =
   | TTyp of var_name
   | TSmol of small_typ
-  | TSkol of var_name * (fexp node list)
+  | TSkol of var_name * (ftyp node list)
   | TRow of ftyp row
   | TL_arrow of eff * large_typ * large_typ
-  | TSig of fexp node row
+  | TSig of ftyp node row
 [@@deriving show]
 
 and ftyp =
   | TInfer
-  | TApp of fexp node * fexp node
+  | TApp of ftyp node * ftyp node
   | TVar of var_name
   | TBase of base_typ
   | TNamed of ident
-  | Abs_FT of var * ftyp
-  | Arrow_F of eff * fexp node * fexp node
+  | Abs_FT of var * ftyp node
+  | Arrow_F of eff * ftyp node * ftyp node
   | TSmall of small_typ
   | TLarge of large_typ
 [@@deriving show]
@@ -103,14 +104,10 @@ let rec elab_type_expr env te =
       (* TODO:  I'm using the position for the whole type expression here but
                 should be using the position for each argument.
        *)
-      Abs_F (var, { n = acc; pos = te.pos })
+      Abs_FT (var, { n = acc; pos = te.pos })
     in
-    match res with
-    | { n = Typ_F res; _ } ->
-       let res = List.fold_right f vs (Typ_F res) in
-       { n = res; pos = te.pos }, env
-    | _ ->
-       failwith "Unreachable base case, elab_type_expr should have returned a ftyp"
+    let res' = List.fold_right f vs (res.n) in
+    { n = res'; pos = te.pos }, env
 
 (* Just trying this out.  *)
 and (>>-) { n; pos } f = { n = f n; pos }
@@ -119,17 +116,17 @@ and (>>-) { n; pos } f = { n = f n; pos }
 and internal_elab env te =
   match te with
   | { n = TE_Bool; pos } ->
-     [], { n = Typ_F (TBase TBool); pos }, env
+     [], { n = TBase TBool; pos }, env
   | { n = TE_Unit; pos } ->
-     [], { n = Typ_F (TBase TUnit); pos }, env
+     [], { n = TBase TUnit; pos }, env
   | { n = TE_Var v; pos } ->
      (* This is a reference to a var, not an abstraction.  *)
-     [], { n = Ident_F (Flat v); pos }, env
+     [], { n = TNamed (Flat v); pos }, env
   | { n = TE_Apply ({ n; _ }, []); pos } ->
-     [], { n = Typ_F (TNamed (Flat n)); pos }, env
+     [], { n = TNamed (Flat n); pos }, env
   | { n = TE_Apply (n, args); pos } ->
      (* No checking here, just elaborate.  *)
-     let base = n >>- (fun l -> Ident_F (Flat l)) in
+     let base = n >>- (fun l -> TNamed (Flat l)) in
      let rec f = function
        | [x] ->
           let _, x, _ = internal_elab env x in
@@ -137,21 +134,14 @@ and internal_elab env te =
        | ({ pos; _ } as x) :: xs ->
           let _, x, _ = internal_elab env x in
           let rem = f xs in
-          { n = Typ_F (TApp (x, rem)); pos }
+          { n = TApp (x, rem); pos }
        | [] -> failwith "Unreachable base case, empty apply."
      in
-     [], { n = Typ_F (TApp (base, f args)); pos }, env
+     [], { n = TApp (base, f args); pos }, env
   | { n = TE_Arrow (a, b); pos } ->
      let vs1, elab_a, env2 = internal_elab env a in
      let vs2, elab_b, env3 = internal_elab env2 b in
-     begin
-       match elab_a, elab_b with
-       | { n = Typ_F _; _ }, { n = Typ_F _; _ } ->
-          vs1 @ vs2, { n = Typ_F (Arrow_F (Impure, elab_a, elab_b)); pos }, env3
-       | aa, bb ->
-          let p = [%derive.show: fexp node] in
-          failwith ("Could not elaborate to F-omega term:  " ^ (p aa) ^ " " ^ (p bb))
-     end
+     vs1 @ vs2, { n = Arrow_F (Impure, elab_a, elab_b); pos }, env3
   | { n = Signature  decls; pos } ->
      elab_sig env decls pos
   | _ ->
@@ -179,15 +169,14 @@ and elab_sig env s sig_pos =
       let f n acc =
         (* TODO:  positions?  *)
         match n with
-        (* TODO:  Ident_F instead.   *)
-        | { n = Ident_F (Flat x); pos } ->
+        | { n = TNamed (Flat x); pos } ->
            (* TODO:  real failure, not from List.assoc.  *)
            let { n = v; _ } = List.assoc x unis in
-           { n = Abs_F (v, acc); pos }
+           { n = Abs_FT (v, acc); pos }
         | { n; pos } ->
            (* TODO:  be less lazy and make a real exception.  *)
            failwith ( "Can't make a type constructor argument with "
-                      ^ ([%derive.show: fexp] n)
+                      ^ ([%derive.show: ftyp] n)
                       ^ " at position "
                       ^ ([%derive.show: pos] pos)
              )
@@ -210,7 +199,7 @@ and elab_sig env s sig_pos =
         List.fold_left
           (fun (vs, elabs) next ->
             match internal_elab env next with
-            | [], ({ n = Ident_F (Flat v); pos } as x), e when e = env ->
+            | [], ({ n = TNamed (Flat v); pos } as x), e when e = env ->
                let vs = (v, { n = Uni (v, KType); pos }) :: vs in
                let elabs = x :: elabs in
                vs, elabs
@@ -237,7 +226,7 @@ and elab_sig env s sig_pos =
          let name, unis, args = elab_constructor c env2 in
          let elab = if List.length args = 0 then
                       let ({ pos; _ }, _) = c in
-                      { n = Typ_F (TNamed (Flat exi_var)); pos }
+                      { n = TNamed (Flat exi_var); pos }
                     else
                       let body =
                         TLarge
@@ -245,14 +234,14 @@ and elab_sig env s sig_pos =
                              ( exi_var
                              , List.map
                                  (fun (x, { pos; _ }) ->
-                                   { n = Typ_F (TNamed (Flat x)); pos }
+                                   { n = TNamed (Flat x); pos }
                                  )
                                  unis
                              )
                           )
                       in
                       let ({ pos; _ }, _) = c in
-                      make_abstraction args unis { n = Typ_F body; pos }
+                      make_abstraction args unis { n = body; pos }
          in
          [name, Exi (exi_var, KType)], (name, elab), env2
       | Transparent_type (constr, t_expr) ->
@@ -266,11 +255,13 @@ and elab_sig env s sig_pos =
          let vs, res, env2 = internal_elab env t_expr in
          begin
            let body = match res with
-             | { n = Typ_F _; _ } as x -> x
-             | { n = App_F _; _ } as x -> x
+             | { n = TApp _; _ } as x ->
+                x
+             | { n = TBase _; _ } as x ->
+                x
              | other ->
                 (* TODO:  proper elaboration expression.  *)
-                failwith ("Can't use " ^ ([%derive.show: fexp node] other) ^ " for type body")
+                failwith ("Can't use " ^ ([%derive.show: ftyp node] other) ^ " for type body")
            in
            let elab = make_abstraction args unis body in
             vs, (name, elab), env2
@@ -285,11 +276,8 @@ and elab_sig env s sig_pos =
           value binding will thus be lifted out.
           *)
          begin
-           match internal_elab env t_expr with
-           | vs, ({ n = Typ_F _; _ } as elab), env2 ->
-              vs, (n, elab), env2
-           | _, other, _ ->
-              failwith ("Can't use " ^ ([%derive.show: fexp node] other) ^ " for val binding.")
+           let vs, elab, env2 = internal_elab env t_expr in
+           vs, (n, elab), env2
          end
     in
     (acc_vs @ new_vs), (after_elab :: acc_elabs), env2
@@ -301,31 +289,35 @@ and elab_sig env s sig_pos =
    *)
 
   let res = TSig (Open { fields = (List.rev all_elabs); var = None }) in
-  all_vs, { n = Typ_F (TLarge res); pos = sig_pos }, env
+  all_vs, { n = TLarge res; pos = sig_pos }, env
 
-let unwrap_ftyp = function
-  | { n = Typ_F t; pos } -> { n = t; pos }
-  | { n = _; pos } -> failwith ("Expected type at "^ ([%derive.show: pos] pos))
-
-let rec elab_expr env e =
+let rec elab_module _env _e =
+  failwith "No module elaboration."
+and elab_term env e =
   match e with
+  | { n = Unit; pos } ->
+     { n = Unit_F; pos }, env
   | { n = Label l; pos } ->
      { n = Ident_F (Flat l); pos }, env
   | { n = Core.Dot (x, { n; pos = lpos }); pos } ->
-     let x', env2 = elab_expr env x in
+     let x', env2 = elab_term env x in
      let dot = Dot (x', { n = Ident_F (Flat n); pos = lpos }) in
      { n = Ident_F dot; pos }, env2
   | { n = Fun ( (arg, argt), body ); pos } ->
      let arg_typ, env2 =
        Option.map (fun t -> elab_type_expr env t) argt
-       |> Option.value ~default:({ n = Typ_F TInfer; pos }, env)
+       |> Option.value ~default:({ n = TInfer; pos }, env)
      in
-     let arg, env3 = elab_expr env2 arg in
-     let body, env4 = elab_expr env3 body in
-     { n = Lam_F { arg; arg_typ = unwrap_ftyp arg_typ; body }; pos }, env4
-  | _ -> failwith "Unsupported elab"
+     let arg, env3 = elab env2 arg in
+     let body, env4 = elab env3 body in
+     { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }, env4
+  | _other ->
+     failwith ("Unsupported elab of expr:  " ^ ([%derive.show: term node] _other))
 
-let elab env e =
+and elab env e =
   match e with
-  | Type t -> elab_type_expr env t
-  | Term t -> elab_expr env t
+  | Type t ->
+     let { n = elab; pos }, env2 = elab_type_expr env t in
+     { n = Typ_F elab; pos }, env2
+  | Term t ->
+     elab_term env t

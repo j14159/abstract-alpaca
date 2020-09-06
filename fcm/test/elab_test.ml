@@ -10,20 +10,21 @@ open OUnit2
 
 let fexp_node_printer = [%derive.show: fexp node]
 let assert_fexp_eq = assert_equal ~printer:fexp_node_printer
+let assert_ftyp_eq = assert_equal ~printer:([%derive.show: ftyp node])
 
 (* Convenience methods for the System F AST.  They're here as a sort of
    prototyping/staging area and will move somewhere like src/typing.ml
    later.
  *)
 let null_node x = { n = x; pos = null_pos }
-let tbase b = null_node (Typ_F (TBase b))
-let tvar n = null_node (Typ_F (TVar n))
-let tnamed n = null_node (Typ_F (TNamed (Flat n)))
-let tarrow eff x y = null_node (Typ_F (Arrow_F (eff, x, y)))
-let tsig fs = null_node (Typ_F (TLarge (TSig ( Open { fields = fs; var = None }))))
-let tabs v e = Abs_FT (v, e)
-let tapp x y = null_node (Typ_F (TApp (x, y)))
-let tskol a vs = null_node (Typ_F (TLarge (TSkol (a, vs))))
+let tbase b = null_node (TBase b)
+let tvar n = null_node (TVar n)
+let tnamed n = null_node (TNamed (Flat n))
+let tarrow eff x y = null_node (Arrow_F (eff, x, y))
+let tsig fs = null_node (TLarge (TSig ( Open { fields = fs; var = None })))
+let tabs v e = null_node (Abs_FT (v, e))
+let tapp x y = null_node (TApp (x, y))
+let tskol a vs = null_node (TLarge (TSkol (a, vs)))
 let uni n k = Uni (n, k)
 let exi n k = Exi (n, k)
 
@@ -37,8 +38,8 @@ let test_simple_sig_elab =
       (fun _ ->
         let s1 = { n = Signature []; pos = null_pos } in
         let res1_type, _env = elab_type_expr (Fcm.Env.make ()) s1 in
-        assert_fexp_eq
-          ({ n = Typ_F (TLarge (TSig (Open { var = None; fields = [] }))); pos = null_pos })
+        assert_ftyp_eq
+          ({ n = TLarge (TSig (Open { var = None; fields = [] })); pos = null_pos })
           res1_type
       )
   ; "Single abstract type" >::
@@ -50,11 +51,11 @@ let test_simple_sig_elab =
         let s = { n = Signature [t]; pos = null_pos } in
         let typ, _env = elab_type_expr (Fcm.Env.make ()) s in
         let expected =
-          abs
-             (exi "v_0" KType)
-             (tsig [("t", tnamed "v_0")])
+          tabs
+            (exi "v_0" KType)
+            (tsig [("t", tnamed "v_0")])
         in
-        assert_fexp_eq expected typ
+        assert_ftyp_eq (expected) typ
       )
   ; "Two abstract types, one elaborates to a function." >::
       (fun _ ->
@@ -77,14 +78,14 @@ let test_simple_sig_elab =
         let s = { n = Signature [t; u]; pos = null_pos } in
         let typ, _ = elab_type_expr (Fcm.Env.make ()) s in
 
-        assert_fexp_eq
-          (abs
+        assert_ftyp_eq
+          (tabs
              (exi "v_0" KType)
-             (abs
+             (tabs
                 (exi "v_1" KType)
                 (tsig
                    [ ("t", tnamed "v_0")
-                   ; ("u", abs (uni "v" KType) (tskol "v_1" [tnamed "v"]))
+                   ; ("u", tabs (uni "v" KType) (tskol "v_1" [tnamed "v"]))
                    ]
                 )
              )
@@ -123,11 +124,11 @@ let test_functor _ =
   let sig1 = tsig [("t", tnamed "v_0")] in
   let sig2 = tsig [("f", tarrow Impure (tnamed "t") (tnamed "t"))] in
   let expected_res =
-    abs
+    tabs
       (exi "v_0" KType)
       (tsig [("g", tarrow Impure sig1 sig2)])
   in
-  assert_fexp_eq expected_res res
+  assert_ftyp_eq expected_res res
 
 (* Mix a functor and regular function in the same signature.
 
@@ -152,7 +153,7 @@ let test_functor_and_function _ =
   let expected_g = tarrow Impure (tbase TBool) (tbase TUnit) in
   let expected_sig = tsig [ "f", expected_f; "g", expected_g] in
   let expected =
-    abs
+    tabs
       (Exi ("v_0", KType))
       expected_sig
   in
@@ -174,7 +175,7 @@ let test_functor_and_function _ =
   in
 
   let res, _ = elab_type_expr (Fcm.Env.make ()) core_sig in
-  assert_fexp_eq expected res
+  assert_ftyp_eq expected res
 
 (*
 
@@ -219,14 +220,14 @@ let test_transparent_and_opaque_type _ =
     te_sig [t; u] null_pos
   in
   let expected =
-    abs
+    tabs
       (exi "v_0" KType)
-      (tsig [ "t", abs (uni "a" KType) (tskol "v_0" [tnamed "a"])
-            ; "u", abs (uni "b" KType) (tapp (ident "t") (ident "b"))
+      (tsig [ "t", tabs (uni "a" KType) (tskol "v_0" [tnamed "a"])
+            ; "u", tabs (uni "b" KType) (tapp (tnamed "t") (tnamed "b"))
       ])
   in
   let res, _ = elab_type_expr (Fcm.Env.make ()) to_elab in
-  assert_fexp_eq expected res
+  assert_ftyp_eq expected res
 
 let property_sig_elab_test =
   let open QCheck in
@@ -248,13 +249,31 @@ let valid_fun_gen_test =
     ~name:"Property-based valid function elaborations"
     (make ~print:[%derive.show: term node] Ast_gen.valid_fun_gen)
     (fun x ->
-      match elab_expr (Fcm.Env.make ()) x with
+      match elab_term (Fcm.Env.make ()) x with
       | { n = Lam_F _; _ }, _ -> true
       | _ -> false
     )
 
+(* Only checks anonymous functions, Fcm.Core.Fun.  *)
+let valid_functor_gen_test =
+  let open QCheck in
+  QCheck.Test.make
+    ~count:1000
+    ~name:"Property-based valid functor elaborations"
+    (make ~print:[%derive.show: term node] Ast_gen.valid_functor_gen)
+    (fun x ->
+      match elab_term (Fcm.Env.make ()) x with
+      | { n = Lam_F { arg_typ = { n = TLarge _; _ }; _ }; _ }, _ -> true
+      | { n = Lam_F { arg_typ = { n = Abs_FT _; _ }; _ }; _ }, _ -> true
+      | other, _ ->
+         print_endline ([%derive.show: fexp node] other);
+         false
+    )
+
 let term_gen_tests =
-  [QCheck_ounit.to_ounit2_test valid_fun_gen_test]
+  [ QCheck_ounit.to_ounit2_test valid_fun_gen_test
+  ; QCheck_ounit.to_ounit2_test valid_functor_gen_test
+  ]
 
 let suite =
   "Basic elaboration tests" >:::
