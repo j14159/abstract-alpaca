@@ -69,7 +69,7 @@ type term =
 and bind =
   | Type_decl of type_constructor * type_expr node
   | Variant_decl of type_constructor * ((string node * type_expr node) list)
-  | Let_bind of label * expr node
+  | Let_bind of label * expr
 [@@deriving show]
 
 and expr =

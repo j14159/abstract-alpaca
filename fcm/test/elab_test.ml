@@ -247,7 +247,7 @@ let valid_fun_gen_test =
   QCheck.Test.make
     ~count:100
     ~name:"Property-based valid function elaborations"
-    (make ~print:[%derive.show: term node] Ast_gen.valid_fun_gen)
+    (make ~print:[%derive.show: term node] (Ast_gen.valid_fun_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
       | { n = Lam_F _; _ }, _ -> true
@@ -260,7 +260,7 @@ let valid_functor_gen_test =
   QCheck.Test.make
     ~count:1000
     ~name:"Property-based valid functor elaborations"
-    (make ~print:[%derive.show: term node] Ast_gen.valid_functor_gen)
+    (make ~print:[%derive.show: term node] (Ast_gen.valid_functor_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
       | { n = Lam_F { arg_typ = { n = TLarge _; _ }; _ }; _ }, _ -> true
@@ -270,9 +270,25 @@ let valid_functor_gen_test =
          false
     )
 
+let valid_module_gen_test =
+  let open QCheck in
+  QCheck.Test.make
+    ~count:1000
+    ~name:"Property-based valid module elaborations"
+    (make ~print:[%derive.show: term node] (Ast_gen.module_gen ()))
+    (fun x ->
+      match elab_term (Fcm.Env.make ()) x with
+      | { n = Record_F _; _ }, _ -> true
+      | other, _ ->
+         print_endline ([%derive.show: fexp node] other);
+         false
+    )
+
+
 let term_gen_tests =
   [ QCheck_ounit.to_ounit2_test valid_fun_gen_test
   ; QCheck_ounit.to_ounit2_test valid_functor_gen_test
+  ; QCheck_ounit.to_ounit2_test valid_module_gen_test
   ]
 
 let suite =

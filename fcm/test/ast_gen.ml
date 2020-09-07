@@ -9,9 +9,9 @@ open QCheck
 let width = 80
 
 let list_gen g =
-  let small_small = Gen.list_size (Gen.int_bound 5) g in
+  let _small_small = Gen.list_size (Gen.int_bound 5) g in
   let _small_list = Gen.small_list g in
-  small_small
+  _small_small
 
 let first_valid =
   Gen.oneof [Gen.char_range 'A' 'Z'; Gen.char_range 'a' 'z']
@@ -74,6 +74,24 @@ let available_gen available_types vars =
   else
     oneofl base_type
 
+(* TODO:
+     - enable use of types from other signatures.
+     - Generate (constructur, body) tuple rather than a signature-specific
+       variant.
+
+ *)
+let transparent_gen arg_list =
+  let open Gen in
+  let open Fcm.Core in
+  let type_from (name, args) =
+    let non_node_args = (List.map (fun { n; _ } -> n) args) in
+    map
+      (fun t -> Transparent_type ((name, args), { n = t; pos = null_pos }))
+      (available_gen [] non_node_args)
+  in
+  (* Re-use arg_list to synthesize a list of type variables.  *)
+  (gen_label_and_nodes arg_list) >>= type_from
+
 (* Signature type declaration generator.
 
    [ available_types ] is a list of {! Fcm.Core.type_constructor } instances.
@@ -81,8 +99,7 @@ let available_gen available_types vars =
 let type_decl_gen available_types =
   let open Fcm.Core in
   let open Gen in
-  let arg_list = list_gen
- type_var_gen in
+  let arg_list = list_gen type_var_gen in
   let opaque_gen =
     map (fun (name, args) -> Opaque_type (name, args)) (gen_label_and_nodes arg_list)
   in
@@ -106,26 +123,7 @@ let type_decl_gen available_types =
  variant
   in
 
-  (* TODO:  enable use of types from other signatures.  *)
-  let transparent_gen =
-    (* Re-use arg_list to synthesize a list of type variables.  *)
-    (gen_label_and_nodes arg_list)
-    >>=
-      (fun (name, args) ->
-        let non_node_args = (List.map (fun { n; _ } -> n) args) in
-        oneof [ (* Removing variants until I've thought through how to elaborate
-                   them into F-omega.
-
-                   map
-                   (fun vs -> Transparent_variants ((name, args), vs))
-                   (variant_gen non_node_args)
-               ; *)map
-                   (fun t -> Transparent_type ((name, args), { n = t; pos = null_pos }))
-                   (available_gen [] non_node_args)
-          ]
-      )
-  in
-  oneof [opaque_gen; transparent_gen]
+  oneof [opaque_gen; transparent_gen arg_list]
 
 (* Value bindings in signatures.  *)
 let val_bind_gen available_types =
@@ -185,26 +183,9 @@ let sig_gen ?available_types:(available_types = []) =
 
 *)
 
-let valid_fun_gen =
-  let open Gen in
-  let open Fcm.Core in
-  let base_gen = opt (available_gen [] []) in
-  let p = pair (map (fun l -> Label l) label_gen) base_gen in
-  let f (arg, arg_type) =
-    (* TODO:  literals other than Unit.  *)
-    let body =
-      map
-        (fun b -> Term { n = b; pos = null_pos })
-        (oneofl [arg; Unit])
-    in
-    let arg' = { n = arg; pos = null_pos } in
-    let arg_type' = Option.map (fun x -> { n = x; pos = null_pos }) arg_type in
-    map
-      (fun body -> { n = Fun ((Term arg', arg_type'), body); pos = null_pos })
-      body
-  in
-  p >>= f
-
+(* Used for functor generation so that types explicit in a previous signature
+   argument can be referenced directly.
+ *)
 let extract_types s =
   let open Fcm.Core in match s with
   | { n = Fcm.Core.Signature decls; _ } ->
@@ -219,7 +200,36 @@ let extract_types s =
        decls
   | _ ->
      []
-let valid_functor_gen =
+
+let rec valid_term available =
+  let open Fcm.Core in
+  let open Gen in
+  let avail = map (fun t -> { n = t; pos = null_pos }) (oneofl available) in
+  let core = [valid_fun_gen (); valid_functor_gen ()] in
+  let full = if List.length available > 0 then (avail :: core) else core in
+  let vt = oneof full in
+  map (fun t -> Term t) vt
+
+and valid_fun_gen _ =
+  let open Gen in
+  let open Fcm.Core in
+  let base_gen = opt (available_gen [] []) in
+  let p = pair (map (fun l -> Label l) label_gen) base_gen in
+  let f (arg, arg_type) =
+    (* TODO:  literals other than Unit.  *)
+    let body = valid_term [arg; Unit] in
+    let arg' = { n = arg; pos = null_pos } in
+    let arg_type' = Option.map (fun x -> { n = x; pos = null_pos }) arg_type in
+    let res = map
+      (fun body -> { n = Fun ((Term arg', arg_type'), body); pos = null_pos })
+      body
+    in
+    res
+  in
+  let x = p >>= f in
+  x
+
+and valid_functor_gen _ =
   let open Gen in
   let open Fcm.Core in
   let arg = sig_gen in
@@ -240,3 +250,31 @@ let valid_functor_gen =
        failwith "Expected sig_gen to yield a type."
   in
   arg >>= f
+
+(*
+   TODO:  Expand to admit in-scope types.
+ *)
+let let_bind_gen _ =
+  let open Gen in
+  let open Fcm.Core in
+  let f (name, e) =
+    Let_bind ({ n = name; pos = null_pos }, e)
+  in
+  map f (pair label_gen (valid_term []))
+
+let module_gen _ =
+  let open Gen in
+  let open Fcm.Core in
+  let ts = list_gen (transparent_gen (list_gen type_var_gen)) in
+  let bindings = list_gen (let_bind_gen ()) in
+  let f (t, b) =
+    let t' = List.filter_map
+               (function
+                | Transparent_type (c, e) -> Some (Type_decl (c, e))
+                | _ -> None
+               )
+               t
+    in
+    { n = Mod (t' @ b); pos = null_pos }
+  in
+  map f (pair ts bindings)
