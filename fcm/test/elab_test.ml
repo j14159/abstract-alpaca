@@ -37,7 +37,7 @@ let test_simple_sig_elab =
   [ "Empty sig" >::
       (fun _ ->
         let s1 = { n = Signature []; pos = null_pos } in
-        let res1_type, _env = elab_type_expr (Fcm.Env.make ()) s1 in
+        let _env, res1_type = elab_type_expr (Fcm.Env.make ()) s1 in
         assert_ftyp_eq
           ({ n = TLarge (TSig (Open { var = None; fields = [] })); pos = null_pos })
           res1_type
@@ -49,7 +49,7 @@ let test_simple_sig_elab =
       (fun _ ->
         let t = Opaque_type ({ n = "t"; pos = null_pos }, []) in
         let s = { n = Signature [t]; pos = null_pos } in
-        let typ, _env = elab_type_expr (Fcm.Env.make ()) s in
+        let _env, typ = elab_type_expr (Fcm.Env.make ()) s in
         let expected =
           tabs
             (exi "v_0" KType)
@@ -76,7 +76,7 @@ let test_simple_sig_elab =
                   )
         in
         let s = { n = Signature [t; u]; pos = null_pos } in
-        let typ, _ = elab_type_expr (Fcm.Env.make ()) s in
+        let _, typ = elab_type_expr (Fcm.Env.make ()) s in
 
         assert_ftyp_eq
           (tabs
@@ -119,7 +119,7 @@ let test_functor _ =
   in
   let g = TE_Arrow (arg, body) in
   let d1 = Val_bind ({ n = "g"; pos = null_pos }, { n = g; pos = null_pos }) in
-  let res, _ = elab_type_expr (Fcm.Env.make ()) { n = Signature [d1]; pos = null_pos } in
+  let _, res = elab_type_expr (Fcm.Env.make ()) { n = Signature [d1]; pos = null_pos } in
 
   let sig1 = tsig [("t", tnamed "v_0")] in
   let sig2 = tsig [("f", tarrow Impure (tnamed "t") (tnamed "t"))] in
@@ -174,7 +174,7 @@ let test_functor_and_function _ =
       null_pos
   in
 
-  let res, _ = elab_type_expr (Fcm.Env.make ()) core_sig in
+  let _, res = elab_type_expr (Fcm.Env.make ()) core_sig in
   assert_ftyp_eq expected res
 
 (*
@@ -226,7 +226,7 @@ let test_transparent_and_opaque_type _ =
             ; "u", tabs (uni "b" KType) (tapp (tnamed "t") (tnamed "b"))
       ])
   in
-  let res, _ = elab_type_expr (Fcm.Env.make ()) to_elab in
+  let _, res = elab_type_expr (Fcm.Env.make ()) to_elab in
   assert_ftyp_eq expected res
 
 let property_sig_elab_test =
@@ -250,7 +250,7 @@ let valid_fun_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.valid_fun_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | { n = Lam_F _; _ }, _ -> true
+      | _, { n = Lam_F _; _ } -> true
       | _ -> false
     )
 
@@ -263,9 +263,9 @@ let valid_functor_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.valid_functor_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | { n = Lam_F { arg_typ = { n = TLarge _; _ }; _ }; _ }, _ -> true
-      | { n = Lam_F { arg_typ = { n = Abs_FT _; _ }; _ }; _ }, _ -> true
-      | other, _ ->
+      | _, { n = Lam_F { arg_typ = { n = TLarge _; _ }; _ }; _ } -> true
+      | _, { n = Lam_F { arg_typ = { n = Abs_FT _; _ }; _ }; _ } -> true
+      | _, other ->
          print_endline ([%derive.show: fexp node] other);
          false
     )
@@ -278,8 +278,8 @@ let valid_module_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.module_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | { n = Record_F _; _ }, _ -> true
-      | other, _ ->
+      | _, { n = Record_F _; _ } -> true
+      | _, other ->
          print_endline ([%derive.show: fexp node] other);
          false
     )

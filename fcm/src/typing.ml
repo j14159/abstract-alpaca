@@ -128,7 +128,7 @@ let rec elab_type_expr env te =
   (* `vs` must be `(string, var) list`  *)
   let vs, res, env = internal_elab env te in
   if List.length vs = 0 then
-    res, env
+    env, res
   else
     let f (_name, var) acc =
       (* TODO:  I'm using the position for the whole type expression here but
@@ -137,7 +137,7 @@ let rec elab_type_expr env te =
       Abs_FT (var, { n = acc; pos = te.pos })
     in
     let res' = List.fold_right f vs (res.n) in
-    { n = res'; pos = te.pos }, env
+    env, { n = res'; pos = te.pos }
 
 (* Just trying this out.  *)
 and (>>-) { n; pos } f = { n = f n; pos }
@@ -339,55 +339,55 @@ let rec elab_module env decls pos =
        let _vs, (n, { n = te_elab; pos }), env2 = elab_transparent_type env c e in
        env2, ((n, { n = Typ_F te_elab; pos }) :: memo)
     | Let_bind ({ n; _ }, body) ->
-       let elab, e2 = elab e body in
+       let e2, elab = elab e body in
        e2, ((n, elab) :: memo)
     | Variant_decl _ ->
        failwith "No variant declarations in modules yet."
   in
   let env2, rev_decls = List.fold_left f (env, []) decls in
-  { n = Record_F (Fixed (List.rev rev_decls)); pos }, env2
+  env2, { n = Record_F (Fixed (List.rev rev_decls)); pos }
 
 and elab_term env e =
   match e with
   | { n = Unit; pos } ->
-     { n = Unit_F; pos }, env
+     env, { n = Unit_F; pos }
   | { n = Label l; pos } ->
-     { n = Ident_F (Flat l); pos }, env
+     env, { n = Ident_F (Flat l); pos }
   | { n = Core.Dot (x, { n; pos = lpos }); pos } ->
-     let x', env2 = elab_term env x in
+     let env2, x' = elab_term env x in
      let dot = Dot (x', { n = Ident_F (Flat n); pos = lpos }) in
-     { n = Ident_F dot; pos }, env2
+     env2, { n = Ident_F dot; pos }
   | { n = Fun ( (arg, argt), body ); pos } ->
-     let arg_typ, env2 =
+     let env2, arg_typ =
        Option.map (fun t -> elab_type_expr env t) argt
-       |> Option.value ~default:({ n = TInfer; pos }, env)
+       |> Option.value ~default:(env, { n = TInfer; pos })
      in
-     let arg, env3 = elab env2 arg in
-     let body, env4 = elab env3 body in
-     { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }, env4
+     let env3, arg = elab env2 arg in
+     let env4, body = elab env3 body in
+     env4, { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }
   | { n = Mod decls; pos } ->
      elab_module env decls pos
   | { n = Seal (e, t); pos } ->
-     let ee, env2 = elab_term env e in
-     let et, env3 = elab_type_expr env2 t in
-     { n = Seal_F (ee, et); pos }, env3
+     let env2, ee = elab_term env e in
+     let env3, et = elab_type_expr env2 t in
+     env3, { n = Seal_F (ee, et); pos }
   | { n = With (e, ts); pos } ->
      (* TODO:  why am I using the opposite order of env and term?  FIXME.  *)
-     let ee, env2 = elab env e in
+     let env2, ee = elab env e in
      let f (env_m, memo) (k, v) =
-       let ek, env_m2 = elab_type_expr env_m k in
-       let ev, env_m3 = elab_type_expr env_m2 v in
+       let env_m2, ek = elab_type_expr env_m k in
+       let env_m3, ev = elab_type_expr env_m2 v in
        env_m3, (ek, ev) :: memo
      in
-     let env2, rev_ets = List.fold_left f (env2, []) ts in
-     { n = With_F (ee, List.rev rev_ets); pos }, env2
+     let env3, rev_ets = List.fold_left f (env2, []) ts in
+     env3, { n = With_F (ee, List.rev rev_ets); pos }
   | _other ->
      failwith ("Unsupported elab of expr:  " ^ ([%derive.show: term node] _other))
 
 and elab env e =
   match e with
   | Type t ->
-     let { n = elab; pos }, env2 = elab_type_expr env t in
-     { n = Typ_F elab; pos }, env2
+     let env2, { n = elab; pos } = elab_type_expr env t in
+     env2, { n = Typ_F elab; pos }
   | Term t ->
      elab_term env t
