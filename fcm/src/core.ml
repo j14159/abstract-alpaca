@@ -59,6 +59,11 @@ type term =
   (* Field access, could be for a module, signature, or record:  *)
   | Dot of term node * label
   | Mod of bind list
+  (* It could be argued that sealing, because it involves a type expression as
+     the second argument, is itself a type expression.
+   *)
+  | Seal of term node * type_expr node
+  | With of expr * (type_expr node * type_expr node) list
   | Let of  { name : term node
             ; ret_typ : type_expr node
             ; body : term node

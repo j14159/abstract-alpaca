@@ -11,6 +11,16 @@
   In both cases these are "just functions" that create modules.  For Alpaca, I'd
   like to be able to refer directly to `t` in the function body, rather than
   `Y.t`.
+
+  Type `t` is a universal:
+    G (x : { type t; init : t }) = x.init
+
+    X = { type t = int; init = 0 }
+    G X; -- should be `int`.
+
+    -- Sealed with an abstract, existential type introduction:
+    Y = { type t = int; init = 0; zero = 0 } :> { type t; init : t }
+    G Y; -- should be exi[_]
 *)
 open Core
 
@@ -71,8 +81,19 @@ and fexp =
   | Abs_F of var * fexp node
   | App_F of fexp node * fexp node
   | Typ_F of ftyp
+  (* I'm currently overloading this to handle modules/structures as well.
+     Might need to separate those.
+   *)
   | Record_F of fexp node row
-(* I'm not sure if this separation is right.
+  (* Deferring signature checking to type checking rather than in elaboration.
+   *)
+  | Seal_F of fexp node * ftyp node
+  (* Transparency/sharing and its validity is done during typing, not during
+     elaboration.
+   *)
+  | With_F of fexp node * (ftyp node * ftyp node) list
+
+(* I'm not sure if this separation between small and large here is right.
 
    TODO:  needs links to source AST (core.ml).  Maybe mark "regions" of types
           with core AST nodes.
@@ -346,6 +367,20 @@ and elab_term env e =
      { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }, env4
   | { n = Mod decls; pos } ->
      elab_module env decls pos
+  | { n = Seal (e, t); pos } ->
+     let ee, env2 = elab_term env e in
+     let et, env3 = elab_type_expr env2 t in
+     { n = Seal_F (ee, et); pos }, env3
+  | { n = With (e, ts); pos } ->
+     (* TODO:  why am I using the opposite order of env and term?  FIXME.  *)
+     let ee, env2 = elab env e in
+     let f (env_m, memo) (k, v) =
+       let ek, env_m2 = elab_type_expr env_m k in
+       let ev, env_m3 = elab_type_expr env_m2 v in
+       env_m3, (ek, ev) :: memo
+     in
+     let env2, rev_ets = List.fold_left f (env2, []) ts in
+     { n = With_F (ee, List.rev rev_ets); pos }, env2
   | _other ->
      failwith ("Unsupported elab of expr:  " ^ ([%derive.show: term node] _other))
 
