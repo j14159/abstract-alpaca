@@ -4,6 +4,7 @@
  *)
 
 open Fcm.Core
+open Fcm.Elab
 open Fcm.Typing
 
 open OUnit2
