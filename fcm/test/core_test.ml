@@ -6,7 +6,7 @@ let variable_list_test =
   QCheck.Test.make
     ~count:100
     ~name:"Variable lists"
-    (make ~print:(fun expr -> snd @@ Fcm.Format.format expr 80) Label_gen.constructor_gen)
+    (make ~print:[%derive.show:Fcm.Core.expr] Ast_gen.sig_gen)
     (fun c -> match c with
               | Type c -> Result.is_ok (Fcm.Core.check_type_expr c)
               | _ -> false
