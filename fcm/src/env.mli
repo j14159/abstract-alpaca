@@ -7,8 +7,15 @@ type namespace =
 
 val make : unit -> 'a t
 
+val level : 'a t -> int
+
 val next_var : 'a t -> (string * 'a t)
 
 val bind : namespace -> 'a -> 'a t -> 'a t
 
 val local : string -> 'a t -> 'a option
+
+val enter_level : 'a t -> 'a t
+val leave_level : 'a t -> 'a t
+
+val next_level : 'a t -> ('a t -> ('a t * 'b)) -> ('a t * 'b)

@@ -1,5 +1,5 @@
 (tests
- (names core_test elab_test ast_gen)
+ (names core_test elab_test typing_tests ast_gen)
  (libraries core fcm qcheck-ounit qcheck-core ounit2)
  (preprocess (pps ppx_deriving.show))
 )

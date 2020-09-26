@@ -29,6 +29,8 @@ and internal_elab env te =
      [], { n = TBase TBool; pos }, env
   | { n = TE_Unit; pos } ->
      [], { n = TBase TUnit; pos }, env
+  | { n = Named n; pos } ->
+     [], { n = TNamed (Flat n); pos }, env
   | { n = TE_Var v; pos } ->
      (* This is a reference to a var, not an abstraction.  *)
      [], { n = TNamed (Flat v); pos }, env
@@ -54,8 +56,8 @@ and internal_elab env te =
      vs1 @ vs2, { n = Arrow_F (Impure, elab_a, elab_b); pos }, env3
   | { n = Signature  decls; pos } ->
      elab_sig env decls pos
-  | _ ->
-     failwith "Cannot yet elaborate this type."
+  | { n; _ } ->
+     failwith ("Cannot yet elaborate this type:  " ^ ([%derive.show: type_expr] n))
 
 (* Elaborate each of a type constructor's parameters, collect all variable
    names for an enclosing type abstraction, return a tuple of name,
@@ -219,13 +221,14 @@ let rec elab_module env decls pos =
        let _vs, (n, { n = te_elab; pos }), env2 = elab_transparent_type env c e in
        env2, ((n, { n = Typ_F te_elab; pos }) :: memo)
     | Let_bind ({ n; _ }, body) ->
-       let e2, elab = elab e body in
-       e2, ((n, elab) :: memo)
+       let e2 = Env.enter_level e in
+       let e3, elab = elab e2 body in
+       Env.leave_level e3, ((n, elab) :: memo)
     | Variant_decl _ ->
        failwith "No variant declarations in modules yet."
   in
   let env2, rev_decls = List.fold_left f (env, []) decls in
-  env2, { n = Record_F (Fixed (List.rev rev_decls)); pos }
+  env2, { n = Structure_F (Fixed (List.rev rev_decls)); pos }
 
 and elab_term env e =
   match e with
@@ -238,13 +241,14 @@ and elab_term env e =
      let dot = Dot (x', { n = Ident_F (Flat n); pos = lpos }) in
      env2, { n = Ident_F dot; pos }
   | { n = Fun ( (arg, argt), body ); pos } ->
-     let env2, arg_typ =
+     let env2 = Env.enter_level env in
+     let env3, arg_typ =
        Option.map (fun t -> elab_type_expr env t) argt
-       |> Option.value ~default:(env, { n = TInfer; pos })
+       |> Option.value ~default:(let e, v = new_var env2 in e, { n = v; pos })
      in
-     let env3, arg = elab env2 arg in
-     let env4, body = elab env3 body in
-     env4, { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }
+     let env4, arg = elab env3 arg in
+     let env5, body = elab env4 body in
+     Env.leave_level env5, { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }
   | { n = Mod decls; pos } ->
      elab_module env decls pos
   | { n = Seal (e, t); pos } ->
@@ -252,7 +256,6 @@ and elab_term env e =
      let env3, et = elab_type_expr env2 t in
      env3, { n = Seal_F (ee, et); pos }
   | { n = With (e, ts); pos } ->
-     (* TODO:  why am I using the opposite order of env and term?  FIXME.  *)
      let env2, ee = elab env e in
      let f (env_m, memo) (k, v) =
        let env_m2, ek = elab_type_expr env_m k in

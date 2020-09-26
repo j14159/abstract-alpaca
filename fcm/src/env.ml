@@ -3,16 +3,23 @@ type namespace =
   (* For dotted reference, e.g. Module.label  *)
   | Scoped of string * string
 
-type 'a t = { next_var : int
-            ; bindings : (namespace * 'a) list
-            }
+type 'a t = {
+    (* For type unification and inference.  *)
+    level : int
+  (* Synthetic/generated variable names. *)
+  ; next_var : int
+  ; bindings : (namespace * 'a) list
+  }
 
 let var_prefix = "v_"
 
 let make _ =
-  { next_var = 0
+  { level = 0
+  ; next_var = 0
   ; bindings = []
   }
+
+let level { level; _ } = level
 
 let next_var ({ next_var; _ } as e) =
   let rv = var_prefix ^ (string_of_int next_var) in
@@ -23,3 +30,12 @@ let bind name expr ({ bindings; _ } as e) =
 
 let local name { bindings; _ } =
   List.assoc_opt (Local name) bindings
+
+let enter_level ({ level; _ } as e) =
+  { e with level = level + 1 }
+let leave_level ({ level; _ } as e) =
+  { e with level = level - 1 }
+
+let next_level ({ level; _ } as env) f =
+  let e2, res = f { env with level = level + 1 } in
+  { e2 with level }, res

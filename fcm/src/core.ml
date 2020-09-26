@@ -53,9 +53,11 @@ and decl =
 
 type term =
   | Unit
+  | Bool of bool
   | Label of string
   | Variant of label * term node
   | Fun of (expr * type_expr node option) * expr
+  | Apply of expr * expr
   (* Field access, could be for a module, signature, or record:  *)
   | Dot of term node * label
   | Mod of bind list

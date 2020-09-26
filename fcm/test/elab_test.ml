@@ -279,7 +279,7 @@ let valid_module_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.module_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | _, { n = Record_F _; _ } -> true
+      | _, { n = Structure_F _; _ } -> true
       | _, other ->
          print_endline ([%derive.show: fexp node] other);
          false
