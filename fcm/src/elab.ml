@@ -212,7 +212,7 @@ and elab_sig env s sig_pos =
      to be empty, assume exi?
    *)
 
-  let res = TSig (Open { fields = (List.rev all_elabs); var = None }) in
+  let res = TSig { fields = (List.rev all_elabs); var = Absent } in
   all_vs, { n = TLarge res; pos = sig_pos }, env
 
 let rec elab_module env decls pos =
@@ -228,7 +228,7 @@ let rec elab_module env decls pos =
        failwith "No variant declarations in modules yet."
   in
   let env2, rev_decls = List.fold_left f (env, []) decls in
-  env2, { n = Structure_F (Fixed (List.rev rev_decls)); pos }
+  env2, { n = Structure_F { fields = (List.rev rev_decls); var = Empty }; pos }
 
 and elab_term env e =
   match e with

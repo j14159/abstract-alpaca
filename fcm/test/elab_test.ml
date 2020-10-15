@@ -22,7 +22,7 @@ let tbase b = null_node (TBase b)
 let tvar n = null_node (TVar n)
 let tnamed n = null_node (TNamed (Flat n))
 let tarrow eff x y = null_node (Arrow_F (eff, x, y))
-let tsig fs = null_node (TLarge (TSig ( Open { fields = fs; var = None })))
+let tsig fs = null_node (TLarge (TSig { fields = fs; var = Absent }))
 let tabs v e = null_node (Abs_FT (v, e))
 let tapp x y = null_node (TApp (x, y))
 let tskol a vs = null_node (TLarge (TSkol (a, vs)))
@@ -40,7 +40,7 @@ let test_simple_sig_elab =
         let s1 = { n = Signature []; pos = null_pos } in
         let _env, res1_type = elab_type_expr (Fcm.Env.make ()) s1 in
         assert_ftyp_eq
-          ({ n = TLarge (TSig (Open { var = None; fields = [] })); pos = null_pos })
+          ({ n = TLarge (TSig { var = Absent; fields = [] }); pos = null_pos })
           res1_type
       )
   ; "Single abstract type" >::

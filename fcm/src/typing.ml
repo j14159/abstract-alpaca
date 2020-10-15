@@ -40,6 +40,15 @@ exception Unexpected_open_structure of pos
 type row_label = string
 [@@deriving show]
 
+exception Strict_row_size of (row_label list * pos)
+(* If a row unification's lower bound already has a "Present" row variable.  *)
+exception Extended_row_constraint of pos
+
+(* Raised when a row tries to unify with a non-row.  *)
+exception Invalid_row_match of (pos * pos)
+
+exception Missing_row_field of pos * row_label
+
 type kind =
   | KType
   | KArrow of kind * kind
@@ -62,11 +71,14 @@ type eff =
   | Impure
 [@@deriving show]
 
-type 'a row =
-  | Fixed of (row_label * 'a) list
-  | Open of { fields : (row_label * 'a) list
-            ; var : 'a row option
-            }
+type 'a row = { fields : (row_label * 'a) list
+              ; var : 'a row_var
+              }
+[@@deriving show]
+and 'a row_var =
+  | Absent
+  | Empty
+  | Present of 'a row
 [@@deriving show]
 
 type base_typ =
@@ -173,7 +185,14 @@ let rec type_of env e =
      let env2 = Env.bind (Local a) arg_typ env in
      let env3, tb = type_of env2 body in
      env3, { n = Arrow_F (Impure, arg_typ, tb); pos }
-  | { n = Structure_F (Fixed decls); pos } ->
+  (* Only variables marked as "empty" can be typed for structures since as
+     an expression, they're always literal and never a pattern or type.
+
+     TODO:  module patterns in functors instead of `var : type`?  If this were
+            permitted then the row variable would need to allow `Absent` as
+            well.
+   *)
+  | { n = Structure_F ({ fields = decls; var = Empty }); pos } ->
      (* TODO:  generalization.  *)
      let f (env, memo) (name, next_decl) =
        let env2 = Env.enter_level env in
@@ -183,11 +202,88 @@ let rec type_of env e =
        (Env.leave_level env4, (name, generalized) :: memo)
      in
      let env2, rev_types = List.fold_left f (env, []) decls in
-     env2, { n = TLarge (TSig (Fixed (List.rev rev_types))); pos }
-  | { n = Structure_F (Open _); pos } ->
+     env2, { n = TLarge (TSig { fields = List.rev rev_types; var = Absent }); pos }
+  | { n = Structure_F { var = Absent; _ }; pos } ->
      raise (Unexpected_open_structure pos)
+  | { n = Seal_F (expr, seal_with); pos } ->
+     let env2, term_typ = type_of env expr in
+     let _ = signature_match env seal_with term_typ in
+     let { n; _ } = seal_with in
+     env2, { n; pos }
   | { n = other; _ } ->
      failwith ("Can't type this yet:  " ^ ([%derive.show: fexp] other))
+
+and unify _env _a _b =
+  failwith "No unification implementation yet."
+
+and signature_match env sig_constraint expr_type =
+  (* Is this actually row matching?  (Shouldn't it be?)
+
+     Signatures with open rows must only occur in functions/functors.
+     *OR*, sealing explicitly drops the row variable.
+     *)
+  (* Order of operations:
+       - Recursively match type abstractions (existentials).
+       - Add existentials from the constraint to the environment.
+       - Unify rows.
+
+     The signature constraint can be more _existentially_ specific than the
+     supplied expression type (more variables, abstractions).
+   *)
+  let match_abstractions _ _ =
+    (* Unwrap each TAbs.  *)
+    failwith "No abstraction matching yet."
+  in
+  let _vars, bare_sc, bare_et = match_abstractions sig_constraint expr_type in
+  match bare_sc, bare_et with
+  | { n = TLarge (TSig c_row); pos = p1 }, { n = TLarge (TSig e_row); pos = p2 } ->
+     unify_row env { n = c_row; pos = p1 } { n = e_row; pos = p2 }
+  | { pos = p1; _ }, { pos = p2; _ } ->
+     print_endline ([%derive.show: ftyp node] sig_constraint);
+     raise (Invalid_row_match (p1, p2) )
+
+and unify_row env lower_bound to_determine =
+  (* Make sure a lower-bound row variable is empty, merge the remaining fields
+     from a row that's trying to match the lower bound into a new "present" row
+     variable when appropriate.
+   *)
+  let merge_row_vars lb_var remaining_fields remaining_var =
+    match lb_var with
+    (* TODO:  positioned error, should be unreachable.
+              Also duplicating error reporting from below.
+     *)
+    | Present _ ->
+       raise (Extended_row_constraint to_determine.pos)
+    | Empty ->
+       raise (Strict_row_size (List.map (fun (x, _) -> x) remaining_fields, to_determine.pos))
+    | Absent ->
+       begin
+         match remaining_var with
+         | Present { fields = xs; var } -> Present { fields = remaining_fields @ xs; var }
+         | _ ->
+            if List.length remaining_fields > 0 then
+              Present { fields = remaining_fields; var = Absent }
+            else
+              Absent
+       end
+  in
+  (* Field-wise checking and unification.  *)
+  let rec ur lfs lvar tfs tvar memo =
+    match lfs, tfs with
+    | [], xs ->
+       merge_row_vars lvar xs tvar
+    | (k, v) :: t, xs ->
+       begin
+         match List.assoc_opt k xs with
+         | None -> raise (Missing_row_field (to_determine.pos, k))
+         | Some target_type ->
+            let _ = unify env v target_type in
+            ur t lvar (List.remove_assoc k xs) tvar ((k, v) :: memo)
+       end
+  in
+  match lower_bound, to_determine with
+  | { n = { fields = lfs; var = lvar }; _ }, { n = { fields = tfs; var = tvar }; _ } ->
+     ur lfs lvar tfs tvar []
 
 (* TODO:  do I actually want `kind_of` here, to match `type_of`?
           Why:  this is mostly making sure a type expression is actually valid.
