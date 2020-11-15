@@ -120,19 +120,6 @@ and fexp =
    TODO:  needs links to source AST (core.ml).  Maybe mark "regions" of types
           with core AST nodes.
  *)
-and small_typ =
-  | TRecord of small_typ row
-  | TArrow of small_typ * small_typ
-[@@deriving show]
-
-and large_typ =
-  | TTyp of var_name
-  | TSmol of small_typ
-  | TSkol of var_name * (ftyp node list)
-  | TRow of ftyp row
-  | TL_arrow of eff * large_typ * large_typ
-  | TSig of ftyp node row
-[@@deriving show]
 
 and ftyp =
   | TInfer of infer_cell ref
@@ -142,8 +129,9 @@ and ftyp =
   | TNamed of ident
   | Abs_FT of var * ftyp node
   | Arrow_F of eff * ftyp node * ftyp node
-  | TSmall of small_typ
-  | TLarge of large_typ
+  | TSkol of var_name * (ftyp node list)
+  | TSig of ftyp node row
+  | TRow of ftyp row
 [@@deriving show]
 
 and level = int
@@ -202,7 +190,7 @@ let rec type_of env e =
        (Env.leave_level env4, (name, generalized) :: memo)
      in
      let env2, rev_types = List.fold_left f (env, []) decls in
-     env2, { n = TLarge (TSig { fields = List.rev rev_types; var = Absent }); pos }
+     env2, { n = TSig { fields = List.rev rev_types; var = Absent }; pos }
   | { n = Structure_F { var = Absent; _ }; pos } ->
      raise (Unexpected_open_structure pos)
   | { n = Seal_F (expr, seal_with); pos } ->
@@ -236,7 +224,7 @@ and signature_match env sig_constraint expr_type =
   in
   let _vars, bare_sc, bare_et = match_abstractions sig_constraint expr_type in
   match bare_sc, bare_et with
-  | { n = TLarge (TSig c_row); pos = p1 }, { n = TLarge (TSig e_row); pos = p2 } ->
+  | { n = TSig c_row; pos = p1 }, { n = TSig e_row; pos = p2 } ->
      unify_row env { n = c_row; pos = p1 } { n = e_row; pos = p2 }
   | { pos = p1; _ }, { pos = p2; _ } ->
      print_endline ([%derive.show: ftyp node] sig_constraint);

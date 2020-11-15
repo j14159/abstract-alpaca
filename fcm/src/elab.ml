@@ -65,7 +65,7 @@ and internal_elab env te =
  *)
 and elab_constructor ({ n = name; _ }, t_exprs) env =
   (* This checks that the environment before and after elaboration of a
-     constructor parameter are equal because of type variables should have
+     constructor parameter are equal because type variables should have
      no side effects.
 
      Type variables become universals.
@@ -171,15 +171,13 @@ and elab_sig env s sig_pos =
                       { n = TNamed (Flat exi_var); pos }
                     else
                       let body =
-                        TLarge
-                          (TSkol
-                             ( exi_var
-                             , List.map
-                                 (fun (x, { pos; _ }) ->
-                                   { n = TNamed (Flat x); pos }
-                                 )
-                                 unis
-                             )
+                        TSkol
+                          ( exi_var
+                          , List.map
+                              (fun (x, { pos; _ }) ->
+                                { n = TNamed (Flat x); pos }
+                              )
+                              unis
                           )
                       in
                       let ({ pos; _ }, _) = c in
@@ -213,7 +211,7 @@ and elab_sig env s sig_pos =
    *)
 
   let res = TSig { fields = (List.rev all_elabs); var = Absent } in
-  all_vs, { n = TLarge res; pos = sig_pos }, env
+  all_vs, { n = res; pos = sig_pos }, env
 
 let rec elab_module env decls pos =
   let f (e, memo) = function
