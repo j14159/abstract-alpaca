@@ -317,7 +317,8 @@ and signature_match env sig_constraint candidate =
        (* Discard remaining abstractions in the candidate since we don't need
           to substitute anything for them:
 
-          TODO:  possible problem for row variable later?  Not sure.
+          FIXME:  remaining abstractions need to be abstractions for the row
+                  variable.
         *)
        match_abstractions env base_constraint body var_memo
     | { pos = p1; _ }, { pos = p2; _ } ->
