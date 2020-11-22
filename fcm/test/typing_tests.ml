@@ -4,19 +4,12 @@ open Fcm.Typing
 
 open OUnit2
 
+open Elab_test
+
 let str ~pos decls = Term { n = Mod decls; pos }
 let np_str = str ~pos:null_pos
 
 let type_decl constr t_expr = Type_decl (constr, t_expr)
-let constr ~pos name args = ({ n = name; pos }, args)
-let np_constr = constr ~pos:null_pos
-
-let t_var ~pos name = { n = TE_Var name; pos }
-let np_t_var = t_var ~pos:null_pos
-
-let opaque_decl constr = Opaque_type constr
-let str_sig ~pos decls = Type { n = Signature decls; pos }
-let np_str_sig = str_sig ~pos:null_pos
 
 let t_unit ~pos = { n = TE_Unit; pos }
 let np_t_unit = t_unit ~pos:null_pos

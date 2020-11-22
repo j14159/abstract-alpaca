@@ -88,7 +88,7 @@ and elab_constructor ({ n = name; _ }, t_exprs) env =
       ([], [])
       t_exprs
   in
-  name, vs, elabs
+  name, (List.rev vs), elabs
 
 (* Both signatures and modules can describe "transparent" types, where the
    implementation of the type is exposed to the user of it.  Signature and
@@ -126,7 +126,7 @@ and elab_transparent_type env constr t_expr =
    and existential respectively) component of a type.
  *)
 and make_abstraction args unis body =
-  let f n acc =
+  let f acc n =
     (* TODO:  positions?  *)
     match n with
     | { n = TNamed (Flat x); pos } ->
@@ -141,7 +141,7 @@ and make_abstraction args unis body =
                   ^ ([%derive.show: pos] pos)
          )
   in
-  List.fold_right f args body
+  List.fold_left f body args
 
 (* Any internal dependency between nested signature elements needs to have an
    existential hoisted out to the outer level.

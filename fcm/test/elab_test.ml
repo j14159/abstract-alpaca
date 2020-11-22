@@ -33,6 +33,17 @@ let abs var body = { n = Abs_F (var, body); pos = null_pos }
 let ident n = null_node (Ident_F (Flat n))
 let app a b = null_node (App_F (a, b))
 
+let str_sig ~pos decls = Type { n = Signature decls; pos }
+let np_str_sig = str_sig ~pos:null_pos
+
+let constr ~pos name args = ({ n = name; pos }, args)
+let np_constr = constr ~pos:null_pos
+
+let t_var ~pos name = { n = TE_Var name; pos }
+let np_t_var = t_var ~pos:null_pos
+
+let opaque_decl constr = Opaque_type constr
+
 (* The very basic elaboration tests.  *)
 let test_simple_sig_elab =
   [ "Empty sig" >::
@@ -92,6 +103,32 @@ let test_simple_sig_elab =
              )
           )
           typ
+      )
+  (* I found some abstraction and variable ordering bugs when testing signature
+     matching.  This should help prevent regression.
+   *)
+  ; "One abstract type with more than one variable." >::
+      (fun _ ->
+        let s = np_str_sig [opaque_decl (np_constr "u" [ np_t_var "a"
+                                                       ; np_t_var "b"
+                                                       ; np_t_var "c"])]
+        in
+        let _, elab_s = elab (Fcm.Env.make ()) s in
+        let uk n = uni n KType in
+        let { n = expected; _ } =
+          tabs
+            (exi "v_0" KType)
+            (tsig
+               [ ("u", tabs (uk "a")
+                         (tabs (uk "b")
+                            (tabs (uk "c") (tskol "v_0" [ tnamed "a"
+                                                        ; tnamed "b"
+                                                        ; tnamed "c"
+                 ]))))
+               ]
+            )
+        in
+        assert_fexp_eq { n = Typ_F expected; pos = null_pos } elab_s
       )
   ]
 
