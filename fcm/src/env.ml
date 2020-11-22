@@ -4,14 +4,14 @@ type namespace =
   | Scoped of string * namespace
 
 
-type 'a t = {
+type ('a, 'b) t = {
     (* For type unification and inference.  *)
     level : int
   (* Synthetic/generated variable names. *)
   ; next_var : int
   ; bindings : (namespace * 'a) list
   (* For type -> kind bindings.  *)
-  ; types : (namespace * 'a) list
+  ; types : (namespace * 'b) list
   }
 
 let var_prefix = "v_"
