@@ -59,6 +59,17 @@ exception Sig_abstraction_fail of pos * pos
 (* TODO:  bad name for "you're not actually matching signatures/structures."  *)
 exception Not_signatures of pos * pos
 
+(* Raised when an abstraction variable (universal or existential) does not have
+   the kind [KType].
+ *)
+exception Bad_abstraction_kind of pos
+
+(* Raised when a KArrow turns up where it shouldn't.
+
+   TODO:  This is a terrible description, and probably a hard-to-use error.
+ *)
+exception Bad_higher_kind of pos
+
 type kind =
   | KType
   | KArrow of kind * kind
@@ -170,6 +181,9 @@ and infer_cell =
     In the above example, the constraint's [t] is not structurally equivalent to
     the candidate's [t] since their arities differ.
  *)
+exception Invalid_substitution_arity of ftyp node * ftyp node
+[@@deriving show]
+
 exception Invalid_substitution of ftyp node * ftyp node
 [@@deriving show]
 
@@ -184,11 +198,18 @@ let rec gen env = function
      { n = Arrow_F (eff, gen env a, gen env b); pos }
   | t -> t
 
+(** Makes sure that k is KType, not a KArrow.  *)
+let constrain_kind k ret pos =
+  match k with
+  | KType -> ret
+  | KArrow _ -> raise (Bad_higher_kind pos)
+
 let rec type_of env e =
   match e with
   | { n = Typ_F t; pos } ->
      (* let ret = { n = t; pos } in *)
-     env, evaluate_type env { n = t; pos }
+     let _ = evaluate_type env { n = t; pos } in
+     env, { n = t; pos}
   | { n = Unit_F; pos } ->
      env, { n = TBase TUnit; pos }
   | { n = Bool_F _; pos } ->
@@ -196,7 +217,7 @@ let rec type_of env e =
   | { n = Ident_F (Flat name); _ } ->
      env, Option.get (Env.local name env)
   | { n = Lam_F { arg = { n = Ident_F (Flat a); _ }; arg_typ; body }; pos } ->
-     let arg_typ = evaluate_type env arg_typ in
+     let _ = constrain_kind (evaluate_type env arg_typ) () pos in
      let env2 = Env.bind (Local a) arg_typ env in
      let env3, tb = type_of env2 body in
      env3, { n = Arrow_F (Impure, arg_typ, tb); pos }
@@ -371,9 +392,9 @@ and signature_match env sig_constraint candidate =
             match.
           *)
          | { n = Abs_FT (Uni (_, KType), _); _ } as a, ({ n = _; _ } as b)->
-            raise (Invalid_substitution (a, b))
+            raise (Invalid_substitution_arity (a, b))
          | { n = _; _ } as a, ({ n = Abs_FT ((Uni _, _)); _ } as b) ->
-            raise (Invalid_substitution (a, b))
+            raise (Invalid_substitution_arity (a, b))
 
          | { n = TSkol (vn, vs); _ }, { n = TSkol (kn, vs2); _ } ->
             (* Check that the constrained existential's name matches the
@@ -431,9 +452,9 @@ and signature_match env sig_constraint candidate =
      (* Update the environment with all variables as legitimate KType kinds
         before unification.
       *)
-     unify_row env { n = c_row; pos = p1 } { n = e_row; pos = p2 }
+     let v = unify_row env { n = c_row; pos = p1 } { n = e_row; pos = p2 } in
+     { n = TSig ({ c_row with var = v }); pos = p1 }
   | { pos = p1; _ }, { pos = p2; _ } ->
-     print_endline ([%derive.show: ftyp node] sig_constraint);
      raise (Invalid_row_match (p1, p2) )
 
 and unify_row env lower_bound to_determine =
@@ -486,22 +507,53 @@ and unify_row env lower_bound to_determine =
  *)
 and evaluate_type env t =
   match t with
-  | { n = TInfer _; _ } -> t
-  | { n = Abs_FT ((Uni (n, KType)) as abs_t, body); pos } ->
-     let env2 = Env.bind (Local n) { n = TAbs_var abs_t; pos } env
-                |> Env.bind_type (Local n) KType
+  | { n = TInfer _; _ } -> KType
+  | { n = Abs_FT (v, body); pos } ->
+     if var_kind v != KType then
+       raise (Bad_abstraction_kind pos)
+     else
+       let binding_name = Env.Local (var_name v) in
+       let env2 = Env.bind binding_name { n = TAbs_var v; pos } env
+                  |> Env.bind_type binding_name KType
+       in
+       let body_kind = evaluate_type env2 body in
+       (* TODO:  it's only an arrow for universals.  *)
+       KArrow (KType, body_kind)
+  | { n = TAbs_var v; _ } -> var_kind v
+  | { n = TBase _; _ } -> KType
+  | { n = TNamed Flat x; _ } ->
+     evaluate_type env (Option.get (Env.local x env))
+  | { n = TSig { fields; var = Absent }; _ } ->
+     (* TODO:  handle the row variable.  *)
+     (* Not keeping the evaluation of the declarations, just checking that
+        they're OK.
+      *)
+     let _ = List.fold_left
+               (fun e next ->
+                      match next with
+                      | (name, not_abs) ->
+                         let res = evaluate_type e not_abs in
+                         Env.bind_type (Local name) res e
+               )
+               env
+               fields
      in
-     let body2 = evaluate_type env2 body in
-     { n = Abs_FT(abs_t, body2); pos }
-  | { n = TBase _; _ } -> t
-  | { n = TNamed Flat x; _ } -> evaluate_type env (Option.get (Env.local x env))
+     KType
+  | { n = TSkol (exi_v, other_vs); pos } ->
+     let k_exi = Env.local_type exi_v env in
+     let should_not_be_arrow = List.fold_left
+                                 (fun acc next ->
+                                   match evaluate_type env next with
+                                   | KType -> acc
+                                   | (KArrow _ ) as k -> k
+                                 )
+                                 (Option.get k_exi)
+                                 other_vs
+     in
+     begin
+       match should_not_be_arrow with
+       | KType -> KType
+       | KArrow _ -> raise (Bad_higher_kind pos)
+     end
   | other ->
      failwith ("Can't evaluate this type expression:  " ^ ([%derive.show: ftyp node] other))
-and validate_type _env t =
-  match t with
-  | { n = TBase _; _ } ->
-     ()
-  | { n = TInfer _; _ } ->
-     ()
-  | { n; _ } ->
-     failwith ("Can't validate this type yet:  " ^ ([%derive.show: ftyp] n))

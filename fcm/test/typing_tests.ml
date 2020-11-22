@@ -32,7 +32,7 @@ let basic_module_tests =
         let m = np_str [] in
         let env, elab_m = elab (Fcm.Env.make ()) m in
         let _, mt = type_of env elab_m in
-        Elab_test.assert_ftyp_eq
+        assert_ftyp_eq
           ({ n = TSig {fields = []; var = Absent}; pos = null_pos })
           mt
       )
@@ -47,17 +47,13 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) m in
         let _, mt = type_of env elab_m in
         let expected =
-          { n = TSig { fields = ["f", Elab_test.tarrow
-                                        Impure
-                                        (Elab_test.tvar "v_0")
-                                        (Elab_test.tvar "v_0")
-                                ]
+          { n = TSig { fields = ["f", tarrow Impure (tvar "v_0") (tvar "v_0") ]
                      ; var = Absent
                   }
           ; pos = null_pos
           }
         in
-        Elab_test.assert_ftyp_eq expected mt
+        assert_ftyp_eq expected mt
       )
   ; "A module with one type and one function using it" >::
       (fun _ ->
@@ -96,18 +92,15 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) m in
         let _, mt = type_of env elab_m in
         let expected =
-          { n = TSig { fields = [ "t", Elab_test.tbase TBool
-                                ; "f", Elab_test.tarrow
-                                         Impure
-                                         (Elab_test.tbase TBool)
-                                         (Elab_test.tbase TBool)
+          { n = TSig { fields = [ "t", tbase TBool
+                                ; "f", tarrow Impure (tnamed "t") (tnamed "t")
                                 ]
                      ; var = Absent
                   }
           ; pos = null_pos
           }
         in
-        Elab_test.assert_ftyp_eq expected mt
+        assert_ftyp_eq expected mt
       )
   ]
 
@@ -136,7 +129,7 @@ let sealing_tests =
           ; pos = null_pos
           }
         in
-        Elab_test.assert_ftyp_eq expected st
+        assert_ftyp_eq expected st
       )
   ; "Make a single-parameter type abstract by sealing." >::
       (fun _ ->
@@ -160,9 +153,9 @@ let sealing_tests =
                   ( Exi ("v_0", KType)
                   , { n = TSig
                             { fields = [("t",
-                                         Elab_test.tabs
-                                           (Elab_test.uni "a" KType)
-                                           { n = TSkol ("v_0", [Elab_test.tnamed "a"] )
+                                         tabs
+                                           (uni "a" KType)
+                                           { n = TSkol ("v_0", [tnamed "a"] )
                                            ; pos = null_pos
                                            }
                                        )]
@@ -174,7 +167,52 @@ let sealing_tests =
           ; pos = null_pos
           }
         in
-        Elab_test.assert_ftyp_eq expected st
+        assert_ftyp_eq expected st
+      )
+  (*
+    This should fail because the constraint (the latter signature) has an arity
+    smaller than the candidate (the former signature).
+
+    { type t a b } :> { type t a }
+
+    The reverse should fail for the same reason:
+
+        { type t a } :> { type t a b }
+   *)
+  ; "Different arity type constructors should fail signature matching." >::
+      (fun _ ->
+        let s_con = np_str_sig [opaque_decl (np_constr "t" [np_t_var "a"])] in
+        let candidate =
+          np_str_sig [opaque_decl (np_constr "t" [np_t_var "a"; np_t_var "b"])]
+        in
+        let env, elab_s_con = elab (Fcm.Env.make ()) s_con in
+        let env, s_con_type = type_of env elab_s_con in
+        let env, elab_candidate = elab env candidate in
+
+        let env, candidate_type = type_of env elab_candidate in
+        let expected_exn =
+          Invalid_substitution_arity
+            ( tskol "v_0" [tnamed "a"]
+            , tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"])
+            )
+        in
+        assert_raises
+          expected_exn
+          (fun _ -> signature_match env s_con_type candidate_type);
+
+        (* Now check the reverse, which should fail with the reverse order of
+           arguments to the exception, but still an arity problem.
+         *)
+        let expected_exn =
+          Invalid_substitution_arity
+            ( tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"])
+            , tskol "v_0" [tnamed "a"]
+            )
+        in
+
+        assert_raises
+          expected_exn
+          (fun _ -> signature_match env candidate_type s_con_type)
       )
   ]
 

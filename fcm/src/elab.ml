@@ -202,7 +202,7 @@ and elab_sig env s sig_pos =
     in
     (acc_vs @ new_vs), (after_elab :: acc_elabs), env2
   in
-  let all_vs, all_elabs, _env = List.fold_left hoist_vars ([], [], env) s in
+  let all_vs, all_elabs, env = List.fold_left hoist_vars ([], [], env) s in
   (* A signature has an unspecified row variable that is filled in when sealing
      a module.
 
