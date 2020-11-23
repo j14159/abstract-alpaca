@@ -514,7 +514,11 @@ and kind_of env t =
        in
        let body_kind = kind_of env2 body in
        (* TODO:  it's only an arrow for universals.  *)
-       KArrow (KType, body_kind)
+       begin
+         match v with
+         | Exi _ -> body_kind
+         | Uni _ -> KArrow (KType, body_kind)
+       end
   | { n = TAbs_var v; _ } -> var_kind v
   | { n = TBase _; _ } -> KType
   | { n = TNamed Flat x; _ } ->
