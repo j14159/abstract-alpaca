@@ -208,7 +208,7 @@ let rec type_of env e =
   match e with
   | { n = Typ_F t; pos } ->
      (* let ret = { n = t; pos } in *)
-     let _ = evaluate_type env { n = t; pos } in
+     let _ = kind_of env { n = t; pos } in
      env, { n = t; pos}
   | { n = Unit_F; pos } ->
      env, { n = TBase TUnit; pos }
@@ -217,7 +217,7 @@ let rec type_of env e =
   | { n = Ident_F (Flat name); _ } ->
      env, Option.get (Env.local name env)
   | { n = Lam_F { arg = { n = Ident_F (Flat a); _ }; arg_typ; body }; pos } ->
-     let _ = constrain_kind (evaluate_type env arg_typ) () pos in
+     let _ = constrain_kind (kind_of env arg_typ) () pos in
      let env2 = Env.bind (Local a) arg_typ env in
      let env3, tb = type_of env2 body in
      env3, { n = Arrow_F (Impure, arg_typ, tb); pos }
@@ -501,11 +501,7 @@ and unify_row env lower_bound to_determine =
   | { n = { fields = lfs; var = lvar }; _ }, { n = { fields = tfs; var = tvar }; _ } ->
      ur lfs lvar tfs tvar []
 
-(* TODO:  do I actually want `kind_of` here, to match `type_of`?
-          Why:  this is mostly making sure a type expression is actually valid.
-          To do that, I'm expecting every type expression to reduce to "*".
- *)
-and evaluate_type env t =
+and kind_of env t =
   match t with
   | { n = TInfer _; _ } -> KType
   | { n = Abs_FT (v, body); pos } ->
@@ -516,13 +512,13 @@ and evaluate_type env t =
        let env2 = Env.bind binding_name { n = TAbs_var v; pos } env
                   |> Env.bind_type binding_name KType
        in
-       let body_kind = evaluate_type env2 body in
+       let body_kind = kind_of env2 body in
        (* TODO:  it's only an arrow for universals.  *)
        KArrow (KType, body_kind)
   | { n = TAbs_var v; _ } -> var_kind v
   | { n = TBase _; _ } -> KType
   | { n = TNamed Flat x; _ } ->
-     evaluate_type env (Option.get (Env.local x env))
+     kind_of env (Option.get (Env.local x env))
   | { n = TSig { fields; var = Absent }; _ } ->
      (* TODO:  handle the row variable.  *)
      (* Not keeping the evaluation of the declarations, just checking that
@@ -532,7 +528,7 @@ and evaluate_type env t =
                (fun e next ->
                       match next with
                       | (name, not_abs) ->
-                         let res = evaluate_type e not_abs in
+                         let res = kind_of e not_abs in
                          Env.bind_type (Local name) res e
                )
                env
@@ -543,7 +539,7 @@ and evaluate_type env t =
      let k_exi = Env.local_type exi_v env in
      let should_not_be_arrow = List.fold_left
                                  (fun acc next ->
-                                   match evaluate_type env next with
+                                   match kind_of env next with
                                    | KType -> acc
                                    | (KArrow _ ) as k -> k
                                  )
