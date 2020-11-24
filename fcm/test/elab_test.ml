@@ -33,7 +33,7 @@ let abs var body = { n = Abs_F (var, body); pos = null_pos }
 let ident n = null_node (Ident_F (Flat n))
 let app a b = null_node (App_F (a, b))
 
-let str_sig ~pos decls = Type { n = Signature decls; pos }
+let str_sig ~pos decls = { n = Signature decls; pos }
 let np_str_sig = str_sig ~pos:null_pos
 
 let constr ~pos name args = ({ n = name; pos }, args)
@@ -113,7 +113,7 @@ let test_simple_sig_elab =
                                                        ; np_t_var "b"
                                                        ; np_t_var "c"])]
         in
-        let _, elab_s = elab (Fcm.Env.make ()) s in
+        let _, elab_s = elab (Fcm.Env.make ()) (Type s) in
         let uk n = uni n KType in
         let { n = expected; _ } =
           tabs

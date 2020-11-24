@@ -173,24 +173,28 @@ and infer_cell =
   | Link of ftyp node
 [@@deriving show]
 
-(** Raised during signature matching when an item from the constraint can't
+
+type substitution_error =
+  | Missing_member of row_label * pos
+  | Mismatched_abstractions of var_name * var_name * pos
+  (** Raised during signature matching when an item from the constraint can't
     substitute for one in the candidate.  An example of this when sealing:
 
         {[ { type t 'a } :> { type t } ]}
 
     In the above example, the constraint's [t] is not structurally equivalent to
     the candidate's [t] since their arities differ.
- *)
-exception Invalid_substitution_arity of ftyp node * ftyp node
+   *)
+  | Invalid_substitution_arity of ftyp node * ftyp node
+  | Invalid_substitution of ftyp node * ftyp node
 [@@deriving show]
 
-exception Invalid_substitution of ftyp node * ftyp node
-[@@deriving show]
 
 let new_var env =
   let v, env2 = Env.next_var env in
   env2, TInfer (ref (Unbound (v, Env.level env2)))
 
+(* TODO:  should generalization actually add universal abstractions?  *)
 let rec gen env = function
   | { n = TInfer { contents = Unbound (name, lvl) }; pos } when lvl > Env.level env ->
      { n = TVar name; pos }
@@ -286,7 +290,16 @@ and unify env t_constraint t_to_check =
    The candidate might have more abstractions because signature matching and
    sealing might "forget" items.
 
-
+   There are three functions contained inside of this:
+   {ol {- [match_abstractions] which checks that the existentials surrounding
+          the two signatures match each other.}
+       {- [eq_check] which is used for checking that members with the same name
+          between the two signatures are structurally equivalent.  This is
+          basically depth-matching.}
+       {- [substitution] which attempts to lookup names in the candidate taken
+          from the constraint, which are then submitted to [eq_check].  This is
+          width-matching.}
+   }
  *)
 and signature_match env sig_constraint candidate =
   (* Unwrap each Abs_FT.
@@ -345,6 +358,61 @@ and signature_match env sig_constraint candidate =
     | { pos = p1; _ }, { pos = p2; _ } ->
        raise (Not_signatures (p1, p2))
   in
+  let rec eq_check univ_map var_map a b =
+    match a, b with
+    (* Exact same types mean substition is OK of course :D  *)
+    | { n = a; _ }, { n = b; _ } when a = b->
+       Result.ok ()
+    (* Can't introduce new existentials in type constructors so this
+       only checks that both sides introduce universals.
+     *)
+    | { n = Abs_FT (Uni (v, KType), b1); _ }, { n = Abs_FT (Uni (k, KType), b2); _ } ->
+       eq_check ((k, v) :: univ_map) var_map b1 b2
+
+    (* Type abstractions in the constraint and candidate must have the same
+       arity.  This and the following pattern check both sides for arity
+       match.
+     *)
+    | { n = Abs_FT (Uni (_, KType), _); _ } as a, ({ n = _; _ } as b)->
+       Result.error (Invalid_substitution_arity (a, b))
+    | { n = _; _ } as a, ({ n = Abs_FT ((Uni _, _)); _ } as b) ->
+       Result.error (Invalid_substitution_arity (a, b))
+
+    | { n = TSkol (vn, vs); _ }, { n = TSkol (kn, vs2); pos } ->
+       (* Check that the constrained existential's name matches the
+          right one from the constraint:
+        *)
+       let must_be_vn = List.assoc kn var_map in
+       if (var_name must_be_vn) != vn then
+         (* TODO:  real error.  *)
+         Result.error (Mismatched_abstractions (vn, var_name must_be_vn, pos))
+       else
+         begin
+           (* Make sure the universals match.
+              FIXME:  /gross/ imperativeness.
+            *)
+           let _ = List.map2
+                     (fun a b -> if a != b then failwith "Mismatched universals" else ())
+                     vs
+                     vs2
+           in
+           Result.ok ()
+         end
+    | { n = TNamed (Flat _vn); _ }, _ ->
+       (* TODO:  make sure the above variable or type name is valid!  *)
+       Result.ok ()
+
+    (* Abstract types that are skolemizations can be substituted for base
+       types.  Sort of allowing the sealing of something using a phantom
+       type.
+
+       FIXME:  there must be a nicer way, avoid itemizing every combination.
+     *)
+    | { n = TSkol _; _ }, { n = TBase _; _ } ->
+       Result.ok ()
+    | a, b ->
+       Result.error (Invalid_substitution (a, b))
+  in
   (*
     TODO:  for each member in the constraint, check if there is a
     structurally equivalent member in the to-match argument.
@@ -373,89 +441,38 @@ and signature_match env sig_constraint candidate =
   let rec substitution var_map c_fs check_fs memo =
     match c_fs with
     | [] ->
-       (List.rev check_fs) @ memo
+       Result.ok ((List.rev check_fs) @ memo)
     | (name, c_type) :: t ->
        (* Structurally equivalent?  Same arity of abstraction? *)
-       let rec eq_check univ_map = function
-         (* Exact same types mean substition is OK of course :D  *)
-         | { n = a; _ }, { n = b; _ } when a = b->
-            ()
-
-         (* Can't introduce new existentials in type constructors so this
-            only checks that both sides introduce universals.
-          *)
-         | { n = Abs_FT (Uni (v, KType), b1); _ }, { n = Abs_FT (Uni (k, KType), b2); _ } ->
-            eq_check ((k, v) :: univ_map) (b1, b2)
-
-         (* Type abstractions in the constraint and candidate must have the same
-            arity.  This and the following pattern check both sides for arity
-            match.
-          *)
-         | { n = Abs_FT (Uni (_, KType), _); _ } as a, ({ n = _; _ } as b)->
-            raise (Invalid_substitution_arity (a, b))
-         | { n = _; _ } as a, ({ n = Abs_FT ((Uni _, _)); _ } as b) ->
-            raise (Invalid_substitution_arity (a, b))
-
-         | { n = TSkol (vn, vs); _ }, { n = TSkol (kn, vs2); _ } ->
-            (* Check that the constrained existential's name matches the
-               right one from the constraint:
-             *)
-            let must_be_vn = List.assoc kn var_map in
-            if (var_name must_be_vn) != vn then
-              (* TODO:  real error.  *)
-              failwith "Mismatched existentials."
-            else
-              begin
-                (* Make sure the universals match.
-                   FIXME:  /gross/ imperativeness.
-                 *)
-                let _ = List.map2
-                          (fun a b -> if a != b then failwith "Mismatched universals" else ())
-                          vs
-                          vs2
-                in
-                ()
-              end
-         | { n = TNamed (Flat _vn); _ }, _ ->
-            (* TODO:  make sure the above variable or type name is valid!  *)
-            ()
-
-         (* Abstract types that are skolemizations can be substituted for base
-            types.
-
-            FIXME:  there must be a nicer way, avoid itemizing every combination.
-          *)
-         | { n = TSkol _; _ }, { n = TBase _; _ } ->
-            ()
-         | a, b ->
-            raise (Invalid_substitution (a, b))
+       (* Lookup `name` in check_fs
+          TODO:  thread this result through.
+        *)
+       let lookup = List.assoc_opt name check_fs
+                    |> Option.map
+                         (fun candidate_field -> eq_check [] var_map c_type candidate_field)
+                    |> Option.value ~default:(Result.error (Missing_member (name, candidate.pos)))
        in
-       (* Lookup `name` in check_fs *)
-       let _ = eq_check [] (c_type, (List.assoc name check_fs)) in
        (* If appropriate, substitute, if not, error.  *)
-       substitution var_map t (List.remove_assoc name check_fs) ((name, c_type) :: memo)
+       Result.bind lookup
+            (fun _ ->
+              substitution var_map t (List.remove_assoc name check_fs) ((name, c_type) :: memo)
+            )
   in
   let env, base_constraint, base_candidate, var_map =
     match_abstractions env sig_constraint candidate []
   in
-  let updated_candidate =
-    match base_constraint, base_candidate with
-    | { n = TSig { fields = cfs; var = Absent }; _ }, { n = TSig { fields = afs; var }; pos } ->
-       { n = TSig { fields = substitution var_map cfs afs []; var }; pos }
-    | _, { pos; _ } ->
-       (* TODO:  useful error.  *)
-       failwith ("Need rows to match signatures at " ^ ([%derive.show: pos] pos))
-  in
-
-  match base_constraint, updated_candidate with
-  | { n = TSig c_row; pos = p1 }, { n = TSig e_row; pos = p2 } ->
-     (* Update the environment with all variables as legitimate KType kinds
-        before unification.
-      *)
-     let v = unify_row env { n = c_row; pos = p1 } { n = e_row; pos = p2 } in
-     { n = TSig ({ c_row with var = v }); pos = p1 }
-  | { pos = p1; _ }, { pos = p2; _ } ->
-     raise (Invalid_row_match (p1, p2) )
+  match base_constraint, base_candidate with
+  | { n = TSig ({ fields = cfs; var = Absent } as con_row); pos = p1 }, { n = TSig { fields = afs; var }; pos = p2 } ->
+     substitution var_map cfs afs []
+     |> Result.map
+          (fun fields ->
+            let cand_row = { fields; var } in
+            let v = unify_row env { n = con_row; pos = p1 } { n = cand_row; pos = p2 } in
+            { n = TSig ({ con_row with var = v }); pos = p1 }
+          )
+  | _, { pos; _ } ->
+     (* TODO:  useful error.  *)
+     failwith ("Need rows to match signatures at " ^ ([%derive.show: pos] pos))
 
 and unify_row env lower_bound to_determine =
   (* Make sure a lower-bound row variable is empty, merge the remaining fields

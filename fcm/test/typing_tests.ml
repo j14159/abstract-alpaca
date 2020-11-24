@@ -6,7 +6,7 @@ open OUnit2
 
 open Elab_test
 
-let str ~pos decls = Term { n = Mod decls; pos }
+let str ~pos decls = { n = Mod decls; pos }
 let np_str = str ~pos:null_pos
 
 let type_decl constr t_expr = Type_decl (constr, t_expr)
@@ -26,16 +26,24 @@ let np_v_fun = v_fun ~pos:null_pos
 let v_label ~pos l = Term { n = Label l; pos }
 let np_v_label = v_label ~pos:null_pos
 
+let elab_and_type env term =
+  let env2, et = elab env term in
+  type_of env2 et
+
 let basic_module_tests =
   [ "An empty module types as a fixed signature" >::
       (fun _ ->
         let m = np_str [] in
-        let env, elab_m = elab (Fcm.Env.make ()) m in
+        let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = type_of env elab_m in
         assert_ftyp_eq
           ({ n = TSig {fields = []; var = Absent}; pos = null_pos })
           mt
       )
+  (*
+
+      { let f x = x }
+   *)
   ; "A module with one function, inferred correctly" >::
       (fun _ ->
         let m =
@@ -44,7 +52,7 @@ let basic_module_tests =
             [ np_bind "f" f
             ]
         in
-        let env, elab_m = elab (Fcm.Env.make ()) m in
+        let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = type_of env elab_m in
         let expected =
           { n = TSig { fields = ["f", tarrow Impure (tvar "v_0") (tvar "v_0") ]
@@ -89,7 +97,7 @@ let basic_module_tests =
             ; np_bind "f" f
             ]
         in
-        let env, elab_m = elab (Fcm.Env.make ()) m in
+        let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = type_of env elab_m in
         let expected =
           { n = TSig { fields = [ "t", tbase TBool
@@ -181,24 +189,25 @@ let sealing_tests =
    *)
   ; "Different arity type constructors should fail signature matching." >::
       (fun _ ->
-        let s_con = np_str_sig [opaque_decl (np_constr "t" [np_t_var "a"])] in
+        let s_con = Type (np_str_sig [opaque_decl (np_constr "t" [np_t_var "a"])]) in
         let candidate =
           np_str_sig [opaque_decl (np_constr "t" [np_t_var "a"; np_t_var "b"])]
         in
         let env, elab_s_con = elab (Fcm.Env.make ()) s_con in
         let env, s_con_type = type_of env elab_s_con in
-        let env, elab_candidate = elab env candidate in
+        let env, elab_candidate = elab env (Type candidate) in
 
         let env, candidate_type = type_of env elab_candidate in
         let expected_exn =
           Invalid_substitution_arity
-            ( tskol "v_0" [tnamed "a"]
-            , tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"])
-            )
+                ( tskol "v_0" [tnamed "a"]
+                , tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"])
+                )
         in
-        assert_raises
+        assert_equal
           expected_exn
-          (fun _ -> signature_match env s_con_type candidate_type);
+          (Result.get_error @@ signature_match env s_con_type candidate_type)
+          ~printer:[%derive.show: substitution_error];
 
         (* Now check the reverse, which should fail with the reverse order of
            arguments to the exception, but still an arity problem.
@@ -210,9 +219,10 @@ let sealing_tests =
             )
         in
 
-        assert_raises
+        assert_equal
           expected_exn
-          (fun _ -> signature_match env candidate_type s_con_type)
+          (Result.get_error @@ signature_match env candidate_type s_con_type)
+      )
       )
   ]
 
