@@ -31,14 +31,6 @@ open Core
  *)
 exception Predicativity_violation of pos
 
-(** Modules (structures) are typed as rows that are not extensible.
-
-    More specifically:  an open (extensible) row can only be used as an argument
-    to a function (functor).  This exception is thrown if an "open" module makes
-    it to the typer.
- *)
-exception Unexpected_open_structure of pos
-
 type row_label = string
 [@@deriving show]
 
@@ -189,6 +181,21 @@ type substitution_error =
   | Invalid_substitution of ftyp node * ftyp node
 [@@deriving show]
 
+type typing_error =
+   | Signature_match_error of substitution_error
+   (** Modules (structures) are typed as rows that are not extensible.
+
+       More specifically:  an open (extensible) row can only be used as an argument
+       to a function (functor).  This exception is thrown if an "open" module makes
+       it to the typer.
+    *)
+   | Unexpected_open_structure of pos
+[@@deriving show]
+
+let invalid_substitution a b = Signature_match_error (Invalid_substitution (a, b))
+let missing_member name pos = Signature_match_error (Missing_member (name, pos))
+let invalid_substitution_arity a b = Signature_match_error (Invalid_substitution_arity (a, b))
+let mismatched_abstractions a b pos = Signature_match_error (Mismatched_abstractions (a, b, pos))
 
 let new_var env =
   let v, env2 = Env.next_var env in
@@ -213,18 +220,20 @@ let rec type_of env e =
   | { n = Typ_F t; pos } ->
      (* let ret = { n = t; pos } in *)
      let _ = kind_of env { n = t; pos } in
-     env, { n = t; pos}
+     Result.ok (env, { n = t; pos})
   | { n = Unit_F; pos } ->
-     env, { n = TBase TUnit; pos }
+    Result.ok (env, { n = TBase TUnit; pos })
   | { n = Bool_F _; pos } ->
-     env, { n = TBase TBool; pos }
+     Result.ok (env, { n = TBase TBool; pos })
   | { n = Ident_F (Flat name); _ } ->
-     env, Option.get (Env.local name env)
+     Result.ok (env, Option.get (Env.local name env))
   | { n = Lam_F { arg = { n = Ident_F (Flat a); _ }; arg_typ; body }; pos } ->
      let _ = constrain_kind (kind_of env arg_typ) () pos in
      let env2 = Env.bind (Local a) arg_typ env in
-     let env3, tb = type_of env2 body in
-     env3, { n = Arrow_F (Impure, arg_typ, tb); pos }
+     type_of env2 body
+     |> Result.map
+          (fun (env3, tb) -> (env3, { n = Arrow_F (Impure, arg_typ, tb); pos }))
+
   (* Only variables marked as "empty" can be typed for structures since as
      an expression, they're always literal and never a pattern or type.
 
@@ -233,22 +242,38 @@ let rec type_of env e =
             well.
    *)
   | { n = Structure_F ({ fields = decls; var = Empty }); pos } ->
-     let f (env, memo) (name, next_decl) =
-       let env2 = Env.enter_level env in
-       let env3, typ = type_of env2 next_decl in
-       let generalized = gen env3 typ in
-       let env4 = Env.bind (Env.Local name) generalized env3 in
-       (Env.leave_level env4, (name, generalized) :: memo)
+     let f acc (* (env, memo) *) (name, next_decl) =
+       Result.bind
+         acc
+         (fun (env, memo) ->
+           let env2 = Env.enter_level env in
+           type_of env2 next_decl
+           |> Result.map (fun (env3, typ) ->
+                  let generalized = gen env3 typ in
+                  let env4 = Env.bind (Env.Local name) generalized env3 in
+                  (Env.leave_level env4, (name, generalized) :: memo)
+                )
+         )
      in
-     let env2, rev_types = List.fold_left f (env, []) decls in
-     env2, { n = TSig { fields = List.rev rev_types; var = Absent }; pos }
+     List.fold_left f (Result.ok (env, [])) decls
+     |> Result.map
+          (fun (env2, rev_types) ->
+            env2, { n = TSig { fields = List.rev rev_types; var = Absent }; pos }
+          )
   | { n = Structure_F { var = Absent; _ }; pos } ->
-     raise (Unexpected_open_structure pos)
+     Result.error (Unexpected_open_structure pos)
   | { n = Seal_F (expr, seal_with); pos } ->
-     let env2, term_typ = type_of env expr in
-     let _ = signature_match env seal_with term_typ in
-     let { n; _ } = seal_with in
-     env2, { n; pos }
+     let match_pass (env2, term_typ) =
+       signature_match env2 seal_with term_typ
+       |> Result.map
+            (* Discard the row variable because we're sealing:  *)
+            ( fun _ ->
+              let { n; _ } = seal_with in
+              env2, { n; pos }
+            )
+     in
+     Result.bind (type_of env expr) match_pass
+
   | { n = other; _ } ->
      failwith ("Can't type this yet:  " ^ ([%derive.show: fexp] other))
 
@@ -322,12 +347,13 @@ and signature_match env sig_constraint candidate =
    *)
   let rec match_abstractions env sig_c cand var_memo=
     match sig_c, cand with
-      | { n = Abs_FT (Exi _, _); pos = p1 }, { n = Abs_FT (Uni _, _); pos = p2 } ->
-         raise (Sig_abstraction_fail (p1, p2))
-      | { n = Abs_FT(a, con_body); pos }, { n = Abs_FT (b, arg_body); _ } ->
-         (* TODO:  maybe kind check on a and b?  *)
-         let env2 = Env.bind (Local (var_name a)) { n = TAbs_var a; pos } env in
-         match_abstractions env2 con_body arg_body ((var_name b, a) :: var_memo)
+    | { n = Abs_FT (Exi _, _); pos = p1 }, { n = Abs_FT (Uni _, _); pos = p2 } ->
+       (* TODO:  Result.t  *)
+       raise (Sig_abstraction_fail (p1, p2))
+    | { n = Abs_FT(a, con_body); pos }, { n = Abs_FT (b, arg_body); _ } ->
+       (* TODO:  maybe kind check on a and b?  *)
+       let env2 = Env.bind (Local (var_name a)) { n = TAbs_var a; pos } env in
+       match_abstractions env2 con_body arg_body ((var_name b, a) :: var_memo)
     | ({ pos; _ } as remaining_constraint), ({ n = TSig _; _ } as base_arg) ->
        (* Collect the variables from the rest of the constraint:  *)
        let rec collect_abst memo = function
@@ -374,9 +400,9 @@ and signature_match env sig_constraint candidate =
        match.
      *)
     | { n = Abs_FT (Uni (_, KType), _); _ } as a, ({ n = _; _ } as b)->
-       Result.error (Invalid_substitution_arity (a, b))
+       Result.error (invalid_substitution_arity a b)
     | { n = _; _ } as a, ({ n = Abs_FT ((Uni _, _)); _ } as b) ->
-       Result.error (Invalid_substitution_arity (a, b))
+       Result.error (invalid_substitution_arity a b)
 
     | { n = TSkol (vn, vs); _ }, { n = TSkol (kn, vs2); pos } ->
        (* Check that the constrained existential's name matches the
@@ -385,7 +411,7 @@ and signature_match env sig_constraint candidate =
        let must_be_vn = List.assoc kn var_map in
        if (var_name must_be_vn) != vn then
          (* TODO:  real error.  *)
-         Result.error (Mismatched_abstractions (vn, var_name must_be_vn, pos))
+         Result.error (mismatched_abstractions vn (var_name must_be_vn) pos)
        else
          begin
            (* Make sure the universals match.
@@ -411,7 +437,7 @@ and signature_match env sig_constraint candidate =
     | { n = TSkol _; _ }, { n = TBase _; _ } ->
        Result.ok ()
     | a, b ->
-       Result.error (Invalid_substitution (a, b))
+       Result.error (invalid_substitution a b)
   in
   (*
     TODO:  for each member in the constraint, check if there is a
@@ -450,7 +476,7 @@ and signature_match env sig_constraint candidate =
        let lookup = List.assoc_opt name check_fs
                     |> Option.map
                          (fun candidate_field -> eq_check [] var_map c_type candidate_field)
-                    |> Option.value ~default:(Result.error (Missing_member (name, candidate.pos)))
+                    |> Option.value ~default:(Result.error (missing_member name candidate.pos))
        in
        (* If appropriate, substitute, if not, error.  *)
        Result.bind lookup

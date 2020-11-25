@@ -35,7 +35,7 @@ let basic_module_tests =
       (fun _ ->
         let m = np_str [] in
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
-        let _, mt = type_of env elab_m in
+        let _, mt = Result.get_ok @@ type_of env elab_m in
         assert_ftyp_eq
           ({ n = TSig {fields = []; var = Absent}; pos = null_pos })
           mt
@@ -53,7 +53,7 @@ let basic_module_tests =
             ]
         in
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
-        let _, mt = type_of env elab_m in
+        let _, mt = Result.get_ok @@ type_of env elab_m in
         let expected =
           { n = TSig { fields = ["f", tarrow Impure (tvar "v_0") (tvar "v_0") ]
                      ; var = Absent
@@ -98,7 +98,7 @@ let basic_module_tests =
             ]
         in
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
-        let _, mt = type_of env elab_m in
+        let _, mt = Result.get_ok @@ type_of env elab_m in
         let expected =
           { n = TSig { fields = [ "t", tbase TBool
                                 ; "f", tarrow Impure (tnamed "t") (tnamed "t")
@@ -123,7 +123,7 @@ let sealing_tests =
         let s = { n = Signature [opaque_decl (np_constr "t" [])]; pos = null_pos } in
         let sealed = Term { n = Seal (m, s); pos = null_pos } in
         let env, elab_sealed = elab (Fcm.Env.make ()) sealed in
-        let _env, st = type_of env elab_sealed in
+        let _env, st = Result.get_ok @@ type_of env elab_sealed in
         let expected =
           { n = Abs_FT
                   ( Exi ("v_0", KType)
@@ -155,7 +155,7 @@ let sealing_tests =
         in
         let sealed = Term { n = Seal (m, s); pos = null_pos } in
         let env, elab_sealed = elab (Fcm.Env.make ()) sealed in
-        let _env, st = type_of env elab_sealed in
+        let _env, st = Result.get_ok @@ type_of env elab_sealed in
         let expected =
           { n = Abs_FT
                   ( Exi ("v_0", KType)
@@ -194,35 +194,67 @@ let sealing_tests =
           np_str_sig [opaque_decl (np_constr "t" [np_t_var "a"; np_t_var "b"])]
         in
         let env, elab_s_con = elab (Fcm.Env.make ()) s_con in
-        let env, s_con_type = type_of env elab_s_con in
+        let env, s_con_type = Result.get_ok @@ type_of env elab_s_con in
         let env, elab_candidate = elab env (Type candidate) in
 
-        let env, candidate_type = type_of env elab_candidate in
+        let env, candidate_type = Result.get_ok @@ type_of env elab_candidate in
         let expected_exn =
-          Invalid_substitution_arity
-                ( tskol "v_0" [tnamed "a"]
-                , tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"])
-                )
+          invalid_substitution_arity
+                (tskol "v_0" [tnamed "a"])
+                (tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"]))
         in
         assert_equal
           expected_exn
           (Result.get_error @@ signature_match env s_con_type candidate_type)
-          ~printer:[%derive.show: substitution_error];
+          ~printer:[%derive.show: typing_error];
 
         (* Now check the reverse, which should fail with the reverse order of
            arguments to the exception, but still an arity problem.
          *)
         let expected_exn =
-          Invalid_substitution_arity
-            ( tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"])
-            , tskol "v_0" [tnamed "a"]
-            )
+          invalid_substitution_arity
+            (tabs (uni "b" KType) (tskol "v_1" [tnamed "a"; tnamed "b"]))
+            (tskol "v_0" [tnamed "a"])
         in
 
         assert_equal
           expected_exn
           (Result.get_error @@ signature_match env candidate_type s_con_type)
+          ~printer:[%derive.show: typing_error]
       )
+  (*
+      { type t = bool
+        let f x = x
+        let g y = y
+      } :> { type t; val f : t -> t }
+   *)
+  ; "Sealing an empty module with a non-empty signature should fail." >::
+      (fun _ ->
+        let s_con = np_str_sig
+                      [ opaque_decl (np_constr "t" [])
+                      ]
+        in
+        let m = np_str [] in
+        let sealed = Term { n = Seal (m, s_con); pos = null_pos } in
+        let err = Result.get_error @@ elab_and_type (Fcm.Env.make ()) sealed in
+        let expected_error = missing_member "t" null_pos in
+        assert_equal expected_error err ~printer:[%derive.show: typing_error]
+      )
+  ; "Sealing a 3-member module with a 2-member signature should forget one member" >::
+      (fun _ ->
+        let s_con = np_str_sig
+                      [ opaque_decl (np_constr "t" [])
+                                    (* TODO other members *)
+                      ]
+        in
+        let m = np_str
+                  [
+                    (* TODO:  actual module.  *)
+                  ]
+        in
+        let sealed = Term { n = Seal (m, s_con); pos = null_pos } in
+        let _, res = Result.get_ok @@ elab_and_type (Fcm.Env.make ()) sealed in
+        assert_ftyp_eq { n = TBase TBool; pos = null_pos } res
       )
   ]
 
