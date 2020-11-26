@@ -15,6 +15,8 @@ let t_unit ~pos = { n = TE_Unit; pos }
 let np_t_unit = t_unit ~pos:null_pos
 let t_bool ~pos = { n = TE_Bool; pos }
 let np_t_bool = t_bool ~pos:null_pos
+let t_int ~pos = { n = TE_Int; pos }
+let np_t_int = t_int ~pos:null_pos
 
 let bind ~pos name expr = Let_bind ({ n = name; pos }, expr)
 let np_bind = bind ~pos:null_pos
@@ -25,6 +27,16 @@ let v_fun ~pos arg arg_t body = Term { n = Fun ((arg, arg_t), body); pos }
 let np_v_fun = v_fun ~pos:null_pos
 let v_label ~pos l = Term { n = Label l; pos }
 let np_v_label = v_label ~pos:null_pos
+
+let te_arrow ~pos a b = { n = TE_Arrow (a, b); pos }
+let np_te_arrow = te_arrow ~pos:null_pos
+
+let te_named ~pos n = { n = Named n; pos }
+let np_te_named = te_named ~pos:null_pos
+
+let let_bind name expr = Let_bind (name, expr)
+let v_fun ~pos a a_typ b = { n = Fun ((a, a_typ), b); pos }
+let np_t_fun = v_fun ~pos:null_pos
 
 let elab_and_type env term =
   let env2, et = elab env term in
@@ -224,7 +236,7 @@ let sealing_tests =
       )
   (*
       { type t = bool
-        let f x = x
+        let f (x : t) = x
         let g y = y
       } :> { type t; val f : t -> t }
    *)
@@ -240,22 +252,89 @@ let sealing_tests =
         let expected_error = missing_member "t" null_pos in
         assert_equal expected_error err ~printer:[%derive.show: typing_error]
       )
+  (*
+      { type t = bool
+        let id x = x
+        let f y z = y
+      } :> { type t; val id : t -> t }
+   *)
   ; "Sealing a 3-member module with a 2-member signature should forget one member" >::
       (fun _ ->
         let s_con = np_str_sig
                       [ opaque_decl (np_constr "t" [])
-                                    (* TODO other members *)
+                      ; val_decl
+                          (null_node "id")
+                          (np_te_arrow (np_te_named "t") (np_te_named "t"))
                       ]
         in
         let m = np_str
-                  [
-                    (* TODO:  actual module.  *)
+                  [ type_decl (np_constr "t" []) np_t_int
+                  ; let_bind
+                      (null_node "id")
+                      (np_v_fun (np_v_label "x") (Option.some (np_te_named "t")) (np_v_label "x"))
+                  ; let_bind
+                      (null_node "f")
+                      (np_v_fun
+                         (np_v_label "y")
+                         Option.None
+                         (np_v_fun (np_v_label "z") Option.None (np_v_label "y"))
+                      )
                   ]
         in
         let sealed = Term { n = Seal (m, s_con); pos = null_pos } in
         let _, res = Result.get_ok @@ elab_and_type (Fcm.Env.make ()) sealed in
-        assert_ftyp_eq { n = TBase TBool; pos = null_pos } res
+        let expected =
+          tabs
+            (exi "v_2" KType)
+            (tsig
+               [ "t", tnamed "v_2"
+               ; "id", tarrow Impure (tnamed "t") (tnamed "t")
+               ]
+            )
+        in
+        assert_ftyp_eq expected res
       )
+  (* When writing the previous test, the substitution check /without/ type
+     annotations on the argument to `id` would fail because the arrows weren't
+     identical.  I added equality/substitution checks and am keeping this test
+     for regressions.
+
+      { type t = bool
+        let id x = x
+      } :> { type t; val id : t -> t }
+   *)
+  ; "Sealing a module with an abstract signature and no annotations." >::
+      (fun _ ->
+        let s_con = np_str_sig
+                      [ opaque_decl (np_constr "t" [])
+                      ; val_decl
+                          (null_node "id")
+                          (np_te_arrow (np_te_named "t") (np_te_named "t"))
+                      ]
+        in
+        let m = np_str
+                  [ type_decl (np_constr "t" []) np_t_int
+                  ; let_bind
+                      (null_node "id")
+                      (* TODO:  test with dropped annotation.  *)
+                      (np_v_fun (np_v_label "x") Option.None (np_v_label "x"))
+                  ]
+        in
+        let sealed = Term { n = Seal (m, s_con); pos = null_pos } in
+        let res = elab_and_type (Fcm.Env.make ()) sealed in
+        let _, res = Result.get_ok @@ res in
+        let expected =
+          tabs
+            (exi "v_1" KType)
+            (tsig
+               [ "t", tnamed "v_1"
+               ; "id", tarrow Impure (tnamed "t") (tnamed "t")
+               ]
+            )
+        in
+        assert_ftyp_eq expected res
+      )
+
   ]
 
 let suite =

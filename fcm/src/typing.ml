@@ -215,6 +215,13 @@ let constrain_kind k ret pos =
   | KType -> ret
   | KArrow _ -> raise (Bad_higher_kind pos)
 
+(* TODO:  it would be maybe very interesting to optionally inject a trace ID
+          here that could be used for optional logging of typing decisions.
+          "Logging" could be replaced with "instrumentation", "output",
+          "streaming", etc.
+
+          Maybe this can wrap `Result`?
+ *)
 let rec type_of env e =
   match e with
   | { n = Typ_F t; pos } ->
@@ -258,7 +265,9 @@ let rec type_of env e =
      List.fold_left f (Result.ok (env, [])) decls
      |> Result.map
           (fun (env2, rev_types) ->
-            env2, { n = TSig { fields = List.rev rev_types; var = Absent }; pos }
+            let typ = { n = TSig { fields = List.rev rev_types; var = Absent }; pos } in
+            (* TODO:  I'd love to optionally log typing decisions somewhere.  *)
+            env2, typ
           )
   | { n = Structure_F { var = Absent; _ }; pos } ->
      Result.error (Unexpected_open_structure pos)
@@ -436,6 +445,12 @@ and signature_match env sig_constraint candidate =
      *)
     | { n = TSkol _; _ }, { n = TBase _; _ } ->
        Result.ok ()
+    | ({ n = Arrow_F (Pure, _, _); _ } as a), ({ n = Arrow_F (Impure, _, _ ); _ } as b) ->
+       Result.error (invalid_substitution a b)
+    | { n = Arrow_F (_, arg1, body1); _ }, { n = Arrow_F (_, arg2, body2); _ } ->
+       let arg_ok = eq_check univ_map var_map arg1 arg2 in
+       Result.bind arg_ok (fun _ -> eq_check univ_map var_map body1 body2)
+
     | a, b ->
        Result.error (invalid_substitution a b)
   in

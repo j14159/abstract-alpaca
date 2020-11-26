@@ -25,10 +25,12 @@ and (>>-) { n; pos } f = { n = f n; pos }
 (* Elaborate without enclosing in existential abstraction.  *)
 and internal_elab env te =
   match te with
-  | { n = TE_Bool; pos } ->
-     [], { n = TBase TBool; pos }, env
   | { n = TE_Unit; pos } ->
      [], { n = TBase TUnit; pos }, env
+  | { n = TE_Bool; pos } ->
+     [], { n = TBase TBool; pos }, env
+  | { n = TE_Int; pos } ->
+     [], { n = TBase TInt; pos }, env
   | { n = Named n; pos } ->
      [], { n = TNamed (Flat n); pos }, env
   | { n = TE_Var v; pos } ->

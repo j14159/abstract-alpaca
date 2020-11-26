@@ -43,6 +43,7 @@ let t_var ~pos name = { n = TE_Var name; pos }
 let np_t_var = t_var ~pos:null_pos
 
 let opaque_decl constr = Opaque_type constr
+let val_decl name body = Val_bind (name, body)
 
 (* The very basic elaboration tests.  *)
 let test_simple_sig_elab =
