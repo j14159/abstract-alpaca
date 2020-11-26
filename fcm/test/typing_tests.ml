@@ -82,21 +82,6 @@ let basic_module_tests =
             let f (b : t) = b
           }
 
-          Because `t` is transparently equivalent to `bool`, the test currently
-          expects `f` to type to `bool -> bool`.  Not sure that this is best.
-
-          In OCaml via utop:
-
-            module M = struct
-              type t = bool
-              let f : t -> t = fun x -> x
-            end;;
-
-          Types as:
-            module M : sig type t = bool val f : t -> t end
-
-          But `M.f;;` returns ` - : bool -> bool = <fun>` so I'll stick with
-          what follows for now.
          *)
         let m =
           let f = np_v_fun
