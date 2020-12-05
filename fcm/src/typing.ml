@@ -51,16 +51,7 @@ exception Sig_abstraction_fail of pos * pos
 (* TODO:  bad name for "you're not actually matching signatures/structures."  *)
 exception Not_signatures of pos * pos
 
-(* Raised when an abstraction variable (universal or existential) does not have
-   the kind [KType].
- *)
-exception Bad_abstraction_kind of pos
 
-(* Raised when a KArrow turns up where it shouldn't.
-
-   TODO:  This is a terrible description, and probably a hard-to-use error.
- *)
-exception Bad_higher_kind of pos
 
 type kind =
   | KType
@@ -92,10 +83,13 @@ type 'a row = { fields : (row_label * 'a) list
               ; var : 'a row_var
               }
 [@@deriving show]
+(* "Empty" means "someone specifically wants this limited".
+   Otherwise there's an optionally quanitified row in the variable.
+ *)
 and 'a row_var =
   | Absent
   | Empty
-  | Present of 'a row
+  | Present of var list * 'a row
 [@@deriving show]
 
 type base_typ =
@@ -120,8 +114,7 @@ and fexp =
   | App_F of fexp node * fexp node
   | Typ_F of ftyp
   | Structure_F of fexp node row
-  (* I'm currently overloading this to handle modules/structures as well.
-     Might need to separate those.
+  (* Problem:  this is a weak syntactic distinction from structures (modules).
    *)
   | Record_F of fexp node row
   (* Deferring signature checking to type checking rather than in elaboration.
@@ -149,8 +142,12 @@ and ftyp =
   | Abs_FT of var * ftyp node
   | Arrow_F of eff * ftyp node * ftyp node
   | TSkol of var_name * (ftyp node list)
-  | TSig of ftyp node row
-  | TRow of ftyp row
+  (* Records and signatures type to rows.  There's a semantic difference in that
+     records must not contain types, that needs a syntactic restriction I think?
+     Aside from this, the exact same operations should be permitted for both
+     types of values (extension, copying, limiting, etc).
+   *)
+  | TRow of ftyp node row
 [@@deriving show]
 
 and level = int
@@ -179,10 +176,26 @@ type substitution_error =
    *)
   | Invalid_substitution_arity of ftyp node * ftyp node
   | Invalid_substitution of ftyp node * ftyp node
+  (* TODO:  should just be mismatched abstractions I think.  *)
+  | Mismatched_universals of ftyp node * ftyp node
 [@@deriving show]
 
 type typing_error =
-   | Signature_match_error of substitution_error
+  (* TODO:  this should probably take position and label?  *)
+  | Binding_not_found of ftyp node
+  (* Raised when an abstraction variable (universal or existential) does not have
+     the kind [KType].
+
+     TODO:  kinding errors separately.
+   *)
+  | Bad_abstraction_kind of pos
+  (* Raised when a KArrow turns up where it shouldn't.
+
+     TODO:  This is a terrible description, and probably a hard-to-use error.
+   *)
+  | Bad_higher_kind of ftyp node * kind
+
+  | Signature_match_error of substitution_error
    (** Modules (structures) are typed as rows that are not extensible.
 
        More specifically:  an open (extensible) row can only be used as an argument
@@ -196,6 +209,16 @@ let invalid_substitution a b = Signature_match_error (Invalid_substitution (a, b
 let missing_member name pos = Signature_match_error (Missing_member (name, pos))
 let invalid_substitution_arity a b = Signature_match_error (Invalid_substitution_arity (a, b))
 let mismatched_abstractions a b pos = Signature_match_error (Mismatched_abstractions (a, b, pos))
+let mismatched_universals a b = Signature_match_error (Mismatched_universals (a, b))
+
+type ('a, 'b) error_tracer =
+  ('a, 'b) Env.t ->
+  typing_error ->
+  ((('a, 'b) Env.t * ftyp node), typing_error) Result.t
+type ('a, 'b) success_tracer =
+  ('a, 'b) Env.t ->
+  ftyp node ->
+  ((('a, 'b) Env.t * ftyp node), typing_error) Result.t
 
 let new_var env =
   let v, env2 = Env.next_var env in
@@ -204,16 +227,24 @@ let new_var env =
 (* TODO:  should generalization actually add universal abstractions?  *)
 let rec gen env = function
   | { n = TInfer { contents = Unbound (name, lvl) }; pos } when lvl > Env.level env ->
-     { n = TVar name; pos }
+     [name], { n = TVar name; pos }
   | { n = Arrow_F (eff, a, b); pos } ->
-     { n = Arrow_F (eff, gen env a, gen env b); pos }
-  | t -> t
+     (* Collect variable names for abstraction later:  *)
+     let vs1, ga = gen env a in
+     let vs2, gb = gen env b in
+     (vs1 @ vs2), { n = Arrow_F (eff, ga, gb); pos }
+  | t -> [], t
 
 (** Makes sure that k is KType, not a KArrow.  *)
-let constrain_kind k ret pos =
-  match k with
-  | KType -> ret
-  | KArrow _ -> raise (Bad_higher_kind pos)
+let constrain_kind k ret =
+  Result.bind
+    k
+    (function
+     | KType -> Result.ok ret
+     | arrow -> Result.error (Bad_higher_kind (ret, arrow))
+    )
+
+let default_trace x = x
 
 (* TODO:  it would be maybe very interesting to optionally inject a trace ID
           here that could be used for optional logging of typing decisions.
@@ -222,24 +253,25 @@ let constrain_kind k ret pos =
 
           Maybe this can wrap `Result`?
  *)
-let rec type_of env e =
+let rec type_of ?trace:(trace = default_trace) env e =
   match e with
   | { n = Typ_F t; pos } ->
-     (* let ret = { n = t; pos } in *)
-     let _ = kind_of env { n = t; pos } in
-     Result.ok (env, { n = t; pos})
+     kind_of env { n = t; pos }
+     |> Result.map (fun _ -> (env, { n = t; pos}))
+     |> trace
   | { n = Unit_F; pos } ->
-    Result.ok (env, { n = TBase TUnit; pos })
+     trace @@ Result.ok (env, { n = TBase TUnit; pos })
   | { n = Bool_F _; pos } ->
-     Result.ok (env, { n = TBase TBool; pos })
+     trace @@ Result.ok (env, { n = TBase TBool; pos })
   | { n = Ident_F (Flat name); _ } ->
-     Result.ok (env, Option.get (Env.local name env))
+     trace @@ Result.ok (env, Option.get (Env.local name env))
   | { n = Lam_F { arg = { n = Ident_F (Flat a); _ }; arg_typ; body }; pos } ->
-     let _ = constrain_kind (kind_of env arg_typ) () pos in
+     let _ = constrain_kind (kind_of env arg_typ) arg_typ in
      let env2 = Env.bind (Local a) arg_typ env in
-     type_of env2 body
+     trace @@ type_of env2 body
      |> Result.map
           (fun (env3, tb) -> (env3, { n = Arrow_F (Impure, arg_typ, tb); pos }))
+     |> trace
 
   (* Only variables marked as "empty" can be typed for structures since as
      an expression, they're always literal and never a pattern or type.
@@ -249,28 +281,48 @@ let rec type_of env e =
             well.
    *)
   | { n = Structure_F ({ fields = decls; var = Empty }); pos } ->
-     let f acc (* (env, memo) *) (name, next_decl) =
+     let f acc (name, next_decl) =
        Result.bind
          acc
          (fun (env, memo) ->
            let env2 = Env.enter_level env in
-           type_of env2 next_decl
+           trace @@ type_of env2 next_decl
            |> Result.map (fun (env3, typ) ->
-                  let generalized = gen env3 typ in
-                  let env4 = Env.bind (Env.Local name) generalized env3 in
-                  (Env.leave_level env4, (name, generalized) :: memo)
+                  let to_abstract, generalized = gen env3 typ in
+                  (* TODO:  efficiency, or just find something off-the-shelf.
+                     Maybe Batteries or Janestreet Core?
+                   *)
+                  let rec dedupe = function
+                    | [] -> []
+                    | [x] -> [x]
+                    | x :: (y :: tl) ->
+                       if x = y then x :: (dedupe tl)
+                       else x :: y :: (dedupe tl)
+                  in
+                  let abs = List.sort String.compare to_abstract
+                            |> dedupe
+                  in
+                  let abs_gen =
+                    List.fold_right
+                      (fun n acc -> { n = Abs_FT (Uni (n, KType), acc); pos = generalized.pos })
+                      abs
+                      generalized
+                  in
+                  let env4 = Env.bind (Env.Local name) abs_gen env3 in
+                  (Env.leave_level env4, (name, abs_gen) :: memo)
                 )
          )
      in
      List.fold_left f (Result.ok (env, [])) decls
      |> Result.map
           (fun (env2, rev_types) ->
-            let typ = { n = TSig { fields = List.rev rev_types; var = Absent }; pos } in
+            let typ = { n = TRow { fields = List.rev rev_types; var = Absent }; pos } in
             (* TODO:  I'd love to optionally log typing decisions somewhere.  *)
             env2, typ
           )
+     |> trace
   | { n = Structure_F { var = Absent; _ }; pos } ->
-     Result.error (Unexpected_open_structure pos)
+     trace @@ Result.error (Unexpected_open_structure pos)
   | { n = Seal_F (expr, seal_with); pos } ->
      let match_pass (env2, term_typ) =
        signature_match env2 seal_with term_typ
@@ -280,8 +332,9 @@ let rec type_of env e =
               let { n; _ } = seal_with in
               env2, { n; pos }
             )
+       |> trace
      in
-     Result.bind (type_of env expr) match_pass
+     trace @@ Result.bind (type_of env expr) match_pass
 
   | { n = other; _ } ->
      failwith ("Can't type this yet:  " ^ ([%derive.show: fexp] other))
@@ -354,7 +407,7 @@ and signature_match env sig_constraint candidate =
      variables to the constraint's variables.  It's used to rename variable
      references in the to-match arg before matching rows.
    *)
-  let rec match_abstractions env sig_c cand var_memo=
+  let rec match_abstractions env sig_c cand var_memo row_abs =
     match sig_c, cand with
     | { n = Abs_FT (Exi _, _); pos = p1 }, { n = Abs_FT (Uni _, _); pos = p2 } ->
        (* TODO:  Result.t  *)
@@ -362,13 +415,13 @@ and signature_match env sig_constraint candidate =
     | { n = Abs_FT(a, con_body); pos }, { n = Abs_FT (b, arg_body); _ } ->
        (* TODO:  maybe kind check on a and b?  *)
        let env2 = Env.bind (Local (var_name a)) { n = TAbs_var a; pos } env in
-       match_abstractions env2 con_body arg_body ((var_name b, a) :: var_memo)
-    | ({ pos; _ } as remaining_constraint), ({ n = TSig _; _ } as base_arg) ->
+       match_abstractions env2 con_body arg_body ((var_name b, a) :: var_memo) row_abs
+    | ({ pos; _ } as remaining_constraint), ({ n = TRow _; _ } as base_arg) ->
        (* Collect the variables from the rest of the constraint:  *)
        let rec collect_abst memo = function
          | { n = Abs_FT (v, body); _ } ->
             collect_abst (v :: memo) body
-         | { n = TSig _; _ } as base ->
+         | { n = TRow _; _ } as base ->
             memo, base
          | _other ->
             (* TODO:  usable error.  *)
@@ -381,15 +434,12 @@ and signature_match env sig_constraint candidate =
            env
            rem_vars
        in
-       env2, base_constraint, base_arg, var_memo
-    | ({ n = TSig _; _ } as base_constraint), { n = Abs_FT (_, body); _ } ->
-       (* Discard remaining abstractions in the candidate since we don't need
-          to substitute anything for them:
-
-          FIXME:  remaining abstractions need to be abstractions for the row
-                  variable.
+       env2, base_constraint, base_arg, var_memo, row_abs
+    | ({ n = TRow _; _ } as base_constraint), { n = Abs_FT (v, body); _ } ->
+       (* Keep the remaining abstraction(s) from the candidate to later add to
+          the row variable:
         *)
-       match_abstractions env base_constraint body var_memo
+       match_abstractions env base_constraint body var_memo (v :: row_abs)
     | { pos = p1; _ }, { pos = p2; _ } ->
        raise (Not_signatures (p1, p2))
   in
@@ -404,16 +454,7 @@ and signature_match env sig_constraint candidate =
     | { n = Abs_FT (Uni (v, KType), b1); _ }, { n = Abs_FT (Uni (k, KType), b2); _ } ->
        eq_check ((k, v) :: univ_map) var_map b1 b2
 
-    (* Type abstractions in the constraint and candidate must have the same
-       arity.  This and the following pattern check both sides for arity
-       match.
-     *)
-    | { n = Abs_FT (Uni (_, KType), _); _ } as a, ({ n = _; _ } as b)->
-       Result.error (invalid_substitution_arity a b)
-    | { n = _; _ } as a, ({ n = Abs_FT ((Uni _, _)); _ } as b) ->
-       Result.error (invalid_substitution_arity a b)
-
-    | { n = TSkol (vn, vs); _ }, { n = TSkol (kn, vs2); pos } ->
+    | { n = TSkol (vn, vs); _ } as a, ({ n = TSkol (kn, vs2); pos } as b) ->
        (* Check that the constrained existential's name matches the
           right one from the constraint:
         *)
@@ -423,15 +464,23 @@ and signature_match env sig_constraint candidate =
          Result.error (mismatched_abstractions vn (var_name must_be_vn) pos)
        else
          begin
-           (* Make sure the universals match.
-              FIXME:  /gross/ imperativeness.
-            *)
-           let _ = List.map2
-                     (fun a b -> if a != b then failwith "Mismatched universals" else ())
-                     vs
-                     vs2
-           in
-           Result.ok ()
+           if List.length vs != List.length vs then
+             Result.error (invalid_substitution_arity a b)
+           else
+             (* Make sure the universals match.  *)
+             List.fold_left2
+               (fun c a b ->
+                 Result.bind
+                   c
+                   (fun _ ->
+                     if a != b then Result.error (mismatched_universals a b)
+                     else (Result.ok ())
+                   )
+               )
+               (Result.ok ())
+               vs
+               vs2
+
          end
     | { n = TNamed (Flat _vn); _ }, _ ->
        (* TODO:  make sure the above variable or type name is valid!  *)
@@ -445,11 +494,27 @@ and signature_match env sig_constraint candidate =
      *)
     | { n = TSkol _; _ }, { n = TBase _; _ } ->
        Result.ok ()
+
+    (* A polymorphic function in the candidate (one with universal abstractions)
+       can be restricted by the constraint.
+     *)
+    | { n = Arrow_F _; _ } as a, { n = Abs_FT ((Uni (_vn, KType), b)); _ } ->
+       (* TODO:  should the universal go into the map?  *)
+       eq_check univ_map var_map a b
     | ({ n = Arrow_F (Pure, _, _); _ } as a), ({ n = Arrow_F (Impure, _, _ ); _ } as b) ->
        Result.error (invalid_substitution a b)
     | { n = Arrow_F (_, arg1, body1); _ }, { n = Arrow_F (_, arg2, body2); _ } ->
        let arg_ok = eq_check univ_map var_map arg1 arg2 in
        Result.bind arg_ok (fun _ -> eq_check univ_map var_map body1 body2)
+
+    (* Type abstractions in the constraint and candidate must have the same
+       arity.  This and the following pattern check both sides for arity
+       match.
+     *)
+    | { n = Abs_FT (Uni (_, KType), _); _ } as a, ({ n = _; _ } as b) ->
+       Result.error (invalid_substitution_arity a b)
+    | { n = _; _ } as a,  ({ n = Abs_FT (Uni (_, KType), _); _ } as b) ->
+       Result.error (invalid_substitution_arity a b)
 
     | a, b ->
        Result.error (invalid_substitution a b)
@@ -499,21 +564,50 @@ and signature_match env sig_constraint candidate =
               substitution var_map t (List.remove_assoc name check_fs) ((name, c_type) :: memo)
             )
   in
-  let env, base_constraint, base_candidate, var_map =
-    match_abstractions env sig_constraint candidate []
-  in
-  match base_constraint, base_candidate with
-  | { n = TSig ({ fields = cfs; var = Absent } as con_row); pos = p1 }, { n = TSig { fields = afs; var }; pos = p2 } ->
-     substitution var_map cfs afs []
-     |> Result.map
-          (fun fields ->
-            let cand_row = { fields; var } in
-            let v = unify_row env { n = con_row; pos = p1 } { n = cand_row; pos = p2 } in
-            { n = TSig ({ con_row with var = v }); pos = p1 }
-          )
-  | _, { pos; _ } ->
-     (* TODO:  useful error.  *)
-     failwith ("Need rows to match signatures at " ^ ([%derive.show: pos] pos))
+  (* First make sure that both the constraint and candidate are valid signatures
+     and have kind KType.  `kind_of` is doing double-duty here underneath
+     TODO:  wrap the rest in results.
+   *)
+  let k_sig = kind_of env sig_constraint in
+  let k_can = kind_of env candidate in
+  (* TODO:  naming, structure *)
+  Result.bind k_can (fun c -> Result.map (fun s -> s, c) k_sig)
+  |> Result.map
+       (function
+        | (KType, KType) as k -> Result.ok k
+        | KType, x -> Result.error (Bad_higher_kind (candidate, x))
+        | x, _ -> Result.error (Bad_higher_kind (sig_constraint, x))
+       )
+  |> Result.join
+  |> Result.map
+       (fun _ ->
+         (* rev_row_abstractions is the reverse-order unmatched *candidate*
+            abstractions.  They need to be attached to the returned row variable after
+            row unification.
+          *)
+         let env, base_constraint, base_candidate, var_map, rev_row_abstractions =
+           match_abstractions env sig_constraint candidate [] []
+         in
+         match base_constraint, base_candidate with
+         | { n = TRow ({ fields = cfs; var = Absent } as con_row); pos = p1 }, { n = TRow { fields = afs; var }; pos = p2 } ->
+            substitution var_map cfs afs []
+            |> Result.map
+                 (fun fields ->
+                   let cand_row = { fields; var } in
+                   let v = unify_row env { n = con_row; pos = p1 } { n = cand_row; pos = p2 } in
+                   let with_abs = match v with
+                     | Present (existing, row) ->
+                        Present (List.rev rev_row_abstractions @ existing, row)
+                     | other ->
+                        other
+                   in
+                   { n = TRow ({ con_row with var = with_abs }); pos = p1 }
+                 )
+         | _, { pos; _ } ->
+            (* TODO:  useful error.  *)
+            failwith ("Need rows to match signatures at " ^ ([%derive.show: pos] pos))
+       )
+  |> Result.join
 
 and unify_row env lower_bound to_determine =
   (* Make sure a lower-bound row variable is empty, merge the remaining fields
@@ -532,10 +626,11 @@ and unify_row env lower_bound to_determine =
     | Absent ->
        begin
          match remaining_var with
-         | Present { fields = xs; var } -> Present { fields = remaining_fields @ xs; var }
+         | Present (vs, { fields = xs; var }) ->
+            Present (vs, { fields = remaining_fields @ xs; var })
          | _ ->
             if List.length remaining_fields > 0 then
-              Present { fields = remaining_fields; var = Absent }
+              Present ([], { fields = remaining_fields; var = Absent })
             else
               Absent
        end
@@ -559,58 +654,108 @@ and unify_row env lower_bound to_determine =
   | { n = { fields = lfs; var = lvar }; _ }, { n = { fields = tfs; var = tvar }; _ } ->
      ur lfs lvar tfs tvar []
 
+(* TODO:  return Result.t  *)
 and kind_of env t =
   match t with
-  | { n = TInfer _; _ } -> KType
+  | { n = TInfer _; _ } ->
+     Result.ok KType
+  | { n = TVar v; _ } ->
+     begin
+       match Env.local_type v env with
+       | Some x -> Result.ok x
+       | None -> Result.error (Binding_not_found t)
+     end
+  | { n = Arrow_F (_, a, b); _ } ->
+     begin
+       match Result.bind (kind_of env a) (fun a -> Result.map (fun b -> a, b) (kind_of env b)) with
+       | Result.Ok (KType, KType) -> Result.ok KType
+       | Result.Ok k ->
+          begin
+            match k with
+            | KType, x -> Result.error (Bad_higher_kind (b, x))
+            | x, _ -> Result.error (Bad_higher_kind (a, x))
+          end
+       | (Result.Error _) as err -> err
+     end
   | { n = Abs_FT (v, body); pos } ->
      if var_kind v != KType then
-       raise (Bad_abstraction_kind pos)
+       Result.error (Bad_abstraction_kind pos)
      else
        let binding_name = Env.Local (var_name v) in
        let env2 = Env.bind binding_name { n = TAbs_var v; pos } env
                   |> Env.bind_type binding_name KType
        in
-       let body_kind = kind_of env2 body in
-       begin
-         match v with
-         | Exi _ -> body_kind
-         | Uni _ -> KArrow (KType, body_kind)
-       end
-  | { n = TAbs_var v; _ } -> var_kind v
-  | { n = TBase _; _ } -> KType
+       kind_of env2 body
+       |> Result.map
+            (fun body_kind ->
+              match v with
+              | Exi _ -> body_kind
+              | Uni _ -> KArrow (KType, body_kind)
+            )
+  | { n = TAbs_var v; _ } -> Result.ok (var_kind v)
+  | { n = TBase _; _ } -> Result.ok KType
   | { n = TNamed Flat x; _ } ->
-     kind_of env (Option.get (Env.local x env))
-  | { n = TSig { fields; var = Absent }; _ } ->
+     let res = Env.local x env
+               |> Option.to_result ~none:()
+               |> Result.map_error (fun _ -> Binding_not_found t)
+     in
+     (* TODO:  naming *)
+     Result.bind res (fun res -> kind_of env res)
+
+  | { n = TRow { fields; var = Absent }; _ } ->
      (* TODO:  handle the row variable.  *)
      (* Not keeping the evaluation of the declarations, just checking that
         they're OK.
+
+        TODO:  var naming.
       *)
-     let _ = List.fold_left
+     let res = List.fold_left
                (fun e next ->
-                      match next with
-                      | (name, not_abs) ->
-                         let res = kind_of e not_abs in
-                         Env.bind_type (Local name) res e
+                 Result.bind
+                   e
+                   (fun e ->
+                     match next with
+                     | (name, not_abs) ->
+                        Result.map
+                          (fun res -> Env.bind_type (Local name) res e)
+                          (kind_of e not_abs)
+                   )
                )
-               env
+               (Result.ok env)
                fields
      in
-     KType
+     Result.map (fun _ -> KType) res
   | { n = TSkol (exi_v, other_vs); pos } ->
      let k_exi = Env.local_type exi_v env in
-     let should_not_be_arrow = List.fold_left
-                                 (fun acc next ->
-                                   match kind_of env next with
-                                   | KType -> acc
-                                   | (KArrow _ ) as k -> k
-                                 )
-                                 (Option.get k_exi)
-                                 other_vs
+     let should_not_be_arrow =
+       List.fold_left
+         (fun acc next ->
+           Result.bind
+             acc
+             (fun acc ->
+               kind_of env next
+               |> Result.map (function
+                      | KType -> acc
+                      | (KArrow _ ) as k -> k
+                    )
+             )
+         )
+         (Option.to_result ~none:(Binding_not_found { n = TVar exi_v; pos }) k_exi)
+         other_vs
      in
-     begin
-       match should_not_be_arrow with
-       | KType -> KType
-       | KArrow _ -> raise (Bad_higher_kind pos)
-     end
+     Result.bind
+       should_not_be_arrow
+       (function
+        | KType -> Result.ok KType
+        | arrow -> Result.error (Bad_higher_kind (t, arrow))
+       )
   | other ->
      failwith ("Can't evaluate this type expression:  " ^ ([%derive.show: ftyp node] other))
+
+and block_type_arrow env ftyp =
+  Result.bind
+    (kind_of env ftyp)
+    (function
+     | KType -> Result.ok ftyp
+     | arrow -> Result.error (Bad_higher_kind (ftyp, arrow))
+    )

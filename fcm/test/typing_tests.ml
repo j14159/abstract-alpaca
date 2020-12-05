@@ -38,9 +38,19 @@ let let_bind name expr = Let_bind (name, expr)
 let v_fun ~pos a a_typ b = { n = Fun ((a, a_typ), b); pos }
 let np_t_fun = v_fun ~pos:null_pos
 
-let elab_and_type env term =
+let elab_and_type ?trace:(trace = default_trace) env term =
   let env2, et = elab env term in
-  type_of env2 et
+  type_of ~trace env2 et
+
+let debug_elab_and_type =
+  let trace x =
+    let _ = match x with
+      | Result.Ok (_, x) -> print_endline ([%derive.show: ftyp node] x)
+      | Result.Error e -> print_endline ([%derive.show: typing_error] e)
+    in
+    x
+  in
+  elab_and_type ~trace
 
 let basic_module_tests =
   [ "An empty module types as a fixed signature" >::
@@ -49,7 +59,7 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = Result.get_ok @@ type_of env elab_m in
         assert_ftyp_eq
-          ({ n = TSig {fields = []; var = Absent}; pos = null_pos })
+          ({ n = TRow {fields = []; var = Absent}; pos = null_pos })
           mt
       )
   (*
@@ -67,7 +77,7 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = Result.get_ok @@ type_of env elab_m in
         let expected =
-          { n = TSig { fields = ["f", tarrow Impure (tvar "v_0") (tvar "v_0") ]
+          { n = TRow { fields = ["f", tabs (uni "v_0" KType) (tarrow Impure (tvar "v_0") (tvar "v_0")) ]
                      ; var = Absent
                   }
           ; pos = null_pos
@@ -97,7 +107,7 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = Result.get_ok @@ type_of env elab_m in
         let expected =
-          { n = TSig { fields = [ "t", tbase TBool
+          { n = TRow { fields = [ "t", tbase TBool
                                 ; "f", tarrow Impure (tnamed "t") (tnamed "t")
                                 ]
                      ; var = Absent
@@ -124,7 +134,7 @@ let sealing_tests =
         let expected =
           { n = Abs_FT
                   ( Exi ("v_0", KType)
-                  , { n = TSig
+                  , { n = TRow
                             { fields = [("t", { n = TNamed (Flat "v_0"); pos = null_pos })]
                             ; var = Absent
                             }
@@ -156,7 +166,7 @@ let sealing_tests =
         let expected =
           { n = Abs_FT
                   ( Exi ("v_0", KType)
-                  , { n = TSig
+                  , { n = TRow
                             { fields = [("t",
                                          tabs
                                            (uni "a" KType)
@@ -319,7 +329,48 @@ let sealing_tests =
         in
         assert_ftyp_eq expected res
       )
+  ; "Sealing a valid module with an invalid signature." >::
+      (fun _ ->
+        let m = np_str
+                  [ type_decl (np_constr "u" []) np_t_int
+                  ; let_bind
+                      (null_node "id")
+                      (np_v_fun (np_v_label "x") Option.None (np_v_label "x"))
+                  ]
+        in
+        (*
+          Use of undefined type in `id`:
 
+              { type u; val id : q -> q }
+         *)
+        let invalid_sig = np_str_sig
+                            [ opaque_decl (np_constr "u" [])
+                            ; val_decl
+                                (null_node "id")
+                                (np_te_arrow (np_te_named "q") (np_te_named "q"))
+                            ]
+        in
+        let sealed = Term { n = Seal (m, invalid_sig); pos = null_pos } in
+
+        let res = elab_and_type (Fcm.Env.make ()) sealed in
+        assert_equal true (Result.is_error res);
+        let res = Result.get_error @@ res in
+        let expected = Binding_not_found (tnamed "q") in
+        assert_equal expected res ~printer:[%derive.show: typing_error]
+      )
+  ; "Invalid sealing of a module with a polymorphic function" >::
+      (fun _ ->
+        (*
+          Hrm.../is/ this invalid?  `f` in the module could be instantiated
+          with `int`.  What's the case I'm actually worried about?
+
+            { type t = int
+              -- for_all 'a: int -> 'a -> int
+              let f (x : int) y = x
+            } :> { type t; val f : t -> t -> t }
+         *)
+        ()
+      )
   ]
 
 let suite =

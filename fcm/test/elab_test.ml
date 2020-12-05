@@ -22,7 +22,7 @@ let tbase b = null_node (TBase b)
 let tvar n = null_node (TVar n)
 let tnamed n = null_node (TNamed (Flat n))
 let tarrow eff x y = null_node (Arrow_F (eff, x, y))
-let tsig fs = null_node (TSig { fields = fs; var = Absent })
+let tsig fs = null_node (TRow { fields = fs; var = Absent })
 let tabs v e = null_node (Abs_FT (v, e))
 let tapp x y = null_node (TApp (x, y))
 let tskol a vs = null_node (TSkol (a, vs))
@@ -52,7 +52,7 @@ let test_simple_sig_elab =
         let s1 = { n = Signature []; pos = null_pos } in
         let _env, res1_type = elab_type_expr (Fcm.Env.make ()) s1 in
         assert_ftyp_eq
-          ({ n = TSig { var = Absent; fields = [] }; pos = null_pos })
+          ({ n = TRow { var = Absent; fields = [] }; pos = null_pos })
           res1_type
       )
   ; "Single abstract type" >::
@@ -302,7 +302,7 @@ let valid_functor_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.valid_functor_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | _, { n = Lam_F { arg_typ = { n = TSig _; _ }; _ }; _ } -> true
+      | _, { n = Lam_F { arg_typ = { n = TRow _; _ }; _ }; _ } -> true
       | _, { n = Lam_F { arg_typ = { n = Abs_FT _; _ }; _ }; _ } -> true
       | _, other ->
          print_endline ([%derive.show: fexp node] other);

@@ -212,7 +212,7 @@ and elab_sig env s sig_pos =
      to be empty, assume exi?
    *)
 
-  let res = TSig { fields = (List.rev all_elabs); var = Absent } in
+  let res = TRow { fields = (List.rev all_elabs); var = Absent } in
   all_vs, { n = res; pos = sig_pos }, env
 
 let rec elab_module env decls pos =

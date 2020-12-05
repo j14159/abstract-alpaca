@@ -29,7 +29,7 @@ let suite =
           let expr = np_lit_row [member] in
           let bound = np_lit_row [] in
           let res = unify_row (Fcm.Env.make ()) bound expr in
-          let expected = Present { fields = [member]; var = Absent } in
+          let expected = Present ([], { fields = [member]; var = Absent }) in
           assert_equal expected res ~printer:([%derive.show: ftyp node row_var])
         )
     ; "Exact match single field" >::
