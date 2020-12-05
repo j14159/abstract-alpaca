@@ -666,17 +666,17 @@ and kind_of env t =
        | None -> Result.error (Binding_not_found t)
      end
   | { n = Arrow_F (_, a, b); _ } ->
-     begin
-       match Result.bind (kind_of env a) (fun a -> Result.map (fun b -> a, b) (kind_of env b)) with
-       | Result.Ok (KType, KType) -> Result.ok KType
-       | Result.Ok k ->
-          begin
-            match k with
-            | KType, x -> Result.error (Bad_higher_kind (b, x))
-            | x, _ -> Result.error (Bad_higher_kind (a, x))
-          end
-       | (Result.Error _) as err -> err
-     end
+     let check_result = function
+       | (KType, KType) -> Result.ok KType
+       | KType, x -> Result.error (Bad_higher_kind (b, x))
+       | x, _ -> Result.error (Bad_higher_kind (a, x))
+     in
+
+     (* Fetch the kinds of `a` and `b`, then make sure they're both KType.  *)
+     Result.bind (kind_of env a) (fun a -> Result.map (fun b -> a, b) (kind_of env b))
+     |> Result.map check_result
+     |> Result.join
+
   | { n = Abs_FT (v, body); pos } ->
      if var_kind v != KType then
        Result.error (Bad_abstraction_kind pos)
@@ -704,58 +704,42 @@ and kind_of env t =
 
   | { n = TRow { fields; var = Absent }; _ } ->
      (* TODO:  handle the row variable.  *)
-     (* Not keeping the evaluation of the declarations, just checking that
-        they're OK.
-
-        TODO:  var naming.
-      *)
-     let res = List.fold_left
-               (fun e next ->
-                 Result.bind
-                   e
-                   (fun e ->
-                     match next with
-                     | (name, not_abs) ->
-                        Result.map
-                          (fun res -> Env.bind_type (Local name) res e)
-                          (kind_of e not_abs)
-                   )
-               )
-               (Result.ok env)
-               fields
-     in
-     Result.map (fun _ -> KType) res
-  | { n = TSkol (exi_v, other_vs); pos } ->
-     let k_exi = Env.local_type exi_v env in
-     let should_not_be_arrow =
-       List.fold_left
-         (fun acc next ->
-           Result.bind
-             acc
-             (fun acc ->
-               kind_of env next
-               |> Result.map (function
-                      | KType -> acc
-                      | (KArrow _ ) as k -> k
-                    )
-             )
-         )
-         (Option.to_result ~none:(Binding_not_found { n = TVar exi_v; pos }) k_exi)
-         other_vs
-     in
-     Result.bind
-       should_not_be_arrow
-       (function
-        | KType -> Result.ok KType
-        | arrow -> Result.error (Bad_higher_kind (t, arrow))
+     List.fold_left
+       (fun e next ->
+         Result.bind
+           e
+           (fun e ->
+             let (name, not_abs) = next in
+             kind_of e not_abs
+             |> Result.map (fun res -> Env.bind_type (Local name) res e)
+           )
        )
+       (Result.ok env)
+       fields
+     |> Result.map (fun _ -> KType)
+  | { n = TSkol (exi_v, other_vs); pos } ->
+     let none = Binding_not_found { n = TVar exi_v; pos } in
+     let k_exi = Env.local_type exi_v env
+                 |> Option.to_result ~none
+     in
+     (* Kind arrows (higher kinds) are treated as arrows in the compound types
+        resulting from "skolemization".
+      *)
+     let fold_f acc next =
+       Result.bind
+           acc
+           (fun prev_result ->
+             let k_next = kind_of env next in
+             Result.bind
+               k_next
+               (function
+                | KType -> Result.ok prev_result
+                | (KArrow _ ) as a -> Result.error (Bad_higher_kind (t, a))
+               )
+           )
+     in
+     List.fold_left fold_f k_exi other_vs
+
   | other ->
      failwith ("Can't evaluate this type expression:  " ^ ([%derive.show: ftyp node] other))
 
-and block_type_arrow env ftyp =
-  Result.bind
-    (kind_of env ftyp)
-    (function
-     | KType -> Result.ok ftyp
-     | arrow -> Result.error (Bad_higher_kind (ftyp, arrow))
-    )
