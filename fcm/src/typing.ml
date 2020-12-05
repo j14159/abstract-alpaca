@@ -572,13 +572,7 @@ and signature_match env sig_constraint candidate =
   let k_can = kind_of env candidate in
   (* TODO:  naming, structure *)
   Result.bind k_can (fun c -> Result.map (fun s -> s, c) k_sig)
-  |> Result.map
-       (function
-        | (KType, KType) as k -> Result.ok k
-        | KType, x -> Result.error (Bad_higher_kind (candidate, x))
-        | x, _ -> Result.error (Bad_higher_kind (sig_constraint, x))
-       )
-  |> Result.join
+  |> check_kind2 sig_constraint candidate
   |> Result.map
        (fun _ ->
          (* rev_row_abstractions is the reverse-order unmatched *candidate*
@@ -589,7 +583,8 @@ and signature_match env sig_constraint candidate =
            match_abstractions env sig_constraint candidate [] []
          in
          match base_constraint, base_candidate with
-         | { n = TRow ({ fields = cfs; var = Absent } as con_row); pos = p1 }, { n = TRow { fields = afs; var }; pos = p2 } ->
+         | { n = TRow ({ fields = cfs; var = Absent } as con_row); pos = p1 }
+         , { n = TRow { fields = afs; var }; pos = p2 } ->
             substitution var_map cfs afs []
             |> Result.map
                  (fun fields ->
@@ -654,28 +649,19 @@ and unify_row env lower_bound to_determine =
   | { n = { fields = lfs; var = lvar }; _ }, { n = { fields = tfs; var = tvar }; _ } ->
      ur lfs lvar tfs tvar []
 
-(* TODO:  return Result.t  *)
 and kind_of env t =
   match t with
   | { n = TInfer _; _ } ->
      Result.ok KType
   | { n = TVar v; _ } ->
-     begin
-       match Env.local_type v env with
-       | Some x -> Result.ok x
-       | None -> Result.error (Binding_not_found t)
-     end
+     let none = Binding_not_found t in
+     Option.to_result ~none (Env.local_type v env)
   | { n = Arrow_F (_, a, b); _ } ->
-     let check_result = function
-       | (KType, KType) -> Result.ok KType
-       | KType, x -> Result.error (Bad_higher_kind (b, x))
-       | x, _ -> Result.error (Bad_higher_kind (a, x))
-     in
-
      (* Fetch the kinds of `a` and `b`, then make sure they're both KType.  *)
-     Result.bind (kind_of env a) (fun a -> Result.map (fun b -> a, b) (kind_of env b))
-     |> Result.map check_result
-     |> Result.join
+     let k_a = kind_of env a in
+     let k_b = kind_of env b in
+     Result.bind k_a (fun ka -> Result.map (fun kb -> ka, kb) k_b)
+     |> check_kind2 a b
 
   | { n = Abs_FT (v, body); pos } ->
      if var_kind v != KType then
@@ -695,12 +681,13 @@ and kind_of env t =
   | { n = TAbs_var v; _ } -> Result.ok (var_kind v)
   | { n = TBase _; _ } -> Result.ok KType
   | { n = TNamed Flat x; _ } ->
-     let res = Env.local x env
-               |> Option.to_result ~none:()
-               |> Result.map_error (fun _ -> Binding_not_found t)
-     in
-     (* TODO:  naming *)
-     Result.bind res (fun res -> kind_of env res)
+     (* Pull the bound type from the environment, convert it to a result so that
+        a missing binding has the right error, then finally check its kind.
+      *)
+     Env.local x env
+     |> Option.to_result ~none:(Binding_not_found t)
+     |> Result.map (fun res -> kind_of env res)
+     |> Result.join
 
   | { n = TRow { fields; var = Absent }; _ } ->
      (* TODO:  handle the row variable.  *)
@@ -743,3 +730,15 @@ and kind_of env t =
   | other ->
      failwith ("Can't evaluate this type expression:  " ^ ([%derive.show: ftyp node] other))
 
+(* In a few places involving arrow types we need to make sure that the kinds of
+   two expressions are KType, rather than a higher kind (kind arrow, KArrow).
+   This does that check as well as the necessary bind with Result.t to keep
+   things clean.
+ *)
+and check_kind2 a b result_tuple =
+  let check_result = function
+    | (KType, KType) -> Result.ok KType
+    | KType, x -> Result.error (Bad_higher_kind (b, x))
+    | x, _ -> Result.error (Bad_higher_kind (a, x))
+  in
+  Result.bind result_tuple check_result
