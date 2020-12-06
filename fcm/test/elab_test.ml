@@ -22,16 +22,28 @@ let tbase b = null_node (TBase b)
 let tvar n = null_node (TVar n)
 let tnamed n = null_node (TNamed (Flat n))
 let tarrow eff x y = null_node (Arrow_F (eff, x, y))
-let tsig fs = null_node (TLarge (TSig ( Open { fields = fs; var = None })))
+let tsig fs = null_node (TRow { fields = fs; var = Absent })
 let tabs v e = null_node (Abs_FT (v, e))
 let tapp x y = null_node (TApp (x, y))
-let tskol a vs = null_node (TLarge (TSkol (a, vs)))
+let tskol a vs = null_node (TSkol (a, vs))
 let uni n k = Uni (n, k)
 let exi n k = Exi (n, k)
 
 let abs var body = { n = Abs_F (var, body); pos = null_pos }
 let ident n = null_node (Ident_F (Flat n))
 let app a b = null_node (App_F (a, b))
+
+let str_sig ~pos decls = { n = Signature decls; pos }
+let np_str_sig = str_sig ~pos:null_pos
+
+let constr ~pos name args = ({ n = name; pos }, args)
+let np_constr = constr ~pos:null_pos
+
+let t_var ~pos name = { n = TE_Var name; pos }
+let np_t_var = t_var ~pos:null_pos
+
+let opaque_decl constr = Opaque_type constr
+let val_decl name body = Val_bind (name, body)
 
 (* The very basic elaboration tests.  *)
 let test_simple_sig_elab =
@@ -40,7 +52,7 @@ let test_simple_sig_elab =
         let s1 = { n = Signature []; pos = null_pos } in
         let _env, res1_type = elab_type_expr (Fcm.Env.make ()) s1 in
         assert_ftyp_eq
-          ({ n = TLarge (TSig (Open { var = None; fields = [] })); pos = null_pos })
+          ({ n = TRow { var = Absent; fields = [] }; pos = null_pos })
           res1_type
       )
   ; "Single abstract type" >::
@@ -92,6 +104,32 @@ let test_simple_sig_elab =
              )
           )
           typ
+      )
+  (* I found some abstraction and variable ordering bugs when testing signature
+     matching.  This should help prevent regression.
+   *)
+  ; "One abstract type with more than one variable." >::
+      (fun _ ->
+        let s = np_str_sig [opaque_decl (np_constr "u" [ np_t_var "a"
+                                                       ; np_t_var "b"
+                                                       ; np_t_var "c"])]
+        in
+        let _, elab_s = elab (Fcm.Env.make ()) (Type s) in
+        let uk n = uni n KType in
+        let { n = expected; _ } =
+          tabs
+            (exi "v_0" KType)
+            (tsig
+               [ ("u", tabs (uk "a")
+                         (tabs (uk "b")
+                            (tabs (uk "c") (tskol "v_0" [ tnamed "a"
+                                                        ; tnamed "b"
+                                                        ; tnamed "c"
+                 ]))))
+               ]
+            )
+        in
+        assert_fexp_eq { n = Typ_F expected; pos = null_pos } elab_s
       )
   ]
 
@@ -264,7 +302,7 @@ let valid_functor_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.valid_functor_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | _, { n = Lam_F { arg_typ = { n = TLarge _; _ }; _ }; _ } -> true
+      | _, { n = Lam_F { arg_typ = { n = TRow _; _ }; _ }; _ } -> true
       | _, { n = Lam_F { arg_typ = { n = Abs_FT _; _ }; _ }; _ } -> true
       | _, other ->
          print_endline ([%derive.show: fexp node] other);
@@ -279,7 +317,7 @@ let valid_module_gen_test =
     (make ~print:[%derive.show: term node] (Ast_gen.module_gen ()))
     (fun x ->
       match elab_term (Fcm.Env.make ()) x with
-      | _, { n = Record_F _; _ } -> true
+      | _, { n = Structure_F _; _ } -> true
       | _, other ->
          print_endline ([%derive.show: fexp node] other);
          false

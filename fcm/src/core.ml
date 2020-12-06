@@ -24,6 +24,7 @@ and type_constructor = label * type_expr node list
 and type_expr =
   | TE_Unit
   | TE_Bool
+  | TE_Int
   | TE_Arrow of type_expr node * type_expr node
   | TE_Var of string
   | Named of string
@@ -53,9 +54,11 @@ and decl =
 
 type term =
   | Unit
+  | Bool of bool
   | Label of string
   | Variant of label * term node
   | Fun of (expr * type_expr node option) * expr
+  | Apply of expr * expr
   (* Field access, could be for a module, signature, or record:  *)
   | Dot of term node * label
   | Mod of bind list
@@ -87,7 +90,7 @@ and expr =
  *)
 let rec check_type_expr e =
   match e with
-  | {n = TE_Unit; _ } | { n = TE_Bool; _ } ->
+  | {n = TE_Unit; _ } | { n = TE_Bool; _ } | { n = TE_Int; _ } ->
      Result.ok ()
   | { n = TE_Arrow (a, b); _ } ->
      Result.bind (check_type_expr a) (fun _ -> check_type_expr b)

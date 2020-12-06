@@ -1,14 +1,24 @@
-type 'a t
+type ('a, 'b) t
 
 type namespace =
   | Local of string
   (* For dotted reference, e.g. Module.label  *)
-  | Scoped of string * string
+  | Scoped of string * namespace
 
-val make : unit -> 'a t
+val make : unit -> ('a, 'b) t
 
-val next_var : 'a t -> (string * 'a t)
+val level : ('a, 'b) t -> int
 
-val bind : namespace -> 'a -> 'a t -> 'a t
+val next_var : ('a, 'b) t -> (string * ('a, 'b) t)
 
-val local : string -> 'a t -> 'a option
+val bind : namespace -> 'a -> ('a, 'b) t -> ('a, 'b) t
+
+val local : string -> ('a, 'b) t -> 'a option
+
+val bind_type : namespace -> 'b -> ('a, 'b) t -> ('a, 'b) t
+val local_type : string -> ('a, 'b) t -> 'b option
+
+val enter_level : ('a, 'b) t -> ('a, 'b) t
+val leave_level : ('a, 'b) t -> ('a, 'b) t
+
+val next_level : ('a, 'b) t -> (('a, 'b) t -> (('a, 'b) t * 'b)) -> (('a, 'b) t * 'b)

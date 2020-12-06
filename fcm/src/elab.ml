@@ -25,10 +25,14 @@ and (>>-) { n; pos } f = { n = f n; pos }
 (* Elaborate without enclosing in existential abstraction.  *)
 and internal_elab env te =
   match te with
-  | { n = TE_Bool; pos } ->
-     [], { n = TBase TBool; pos }, env
   | { n = TE_Unit; pos } ->
      [], { n = TBase TUnit; pos }, env
+  | { n = TE_Bool; pos } ->
+     [], { n = TBase TBool; pos }, env
+  | { n = TE_Int; pos } ->
+     [], { n = TBase TInt; pos }, env
+  | { n = Named n; pos } ->
+     [], { n = TNamed (Flat n); pos }, env
   | { n = TE_Var v; pos } ->
      (* This is a reference to a var, not an abstraction.  *)
      [], { n = TNamed (Flat v); pos }, env
@@ -54,8 +58,8 @@ and internal_elab env te =
      vs1 @ vs2, { n = Arrow_F (Impure, elab_a, elab_b); pos }, env3
   | { n = Signature  decls; pos } ->
      elab_sig env decls pos
-  | _ ->
-     failwith "Cannot yet elaborate this type."
+  | { n; _ } ->
+     failwith ("Cannot yet elaborate this type:  " ^ ([%derive.show: type_expr] n))
 
 (* Elaborate each of a type constructor's parameters, collect all variable
    names for an enclosing type abstraction, return a tuple of name,
@@ -63,7 +67,7 @@ and internal_elab env te =
  *)
 and elab_constructor ({ n = name; _ }, t_exprs) env =
   (* This checks that the environment before and after elaboration of a
-     constructor parameter are equal because of type variables should have
+     constructor parameter are equal because type variables should have
      no side effects.
 
      Type variables become universals.
@@ -86,7 +90,7 @@ and elab_constructor ({ n = name; _ }, t_exprs) env =
       ([], [])
       t_exprs
   in
-  name, vs, elabs
+  name, (List.rev vs), elabs
 
 (* Both signatures and modules can describe "transparent" types, where the
    implementation of the type is exposed to the user of it.  Signature and
@@ -124,7 +128,7 @@ and elab_transparent_type env constr t_expr =
    and existential respectively) component of a type.
  *)
 and make_abstraction args unis body =
-  let f n acc =
+  let f acc n =
     (* TODO:  positions?  *)
     match n with
     | { n = TNamed (Flat x); pos } ->
@@ -139,7 +143,7 @@ and make_abstraction args unis body =
                   ^ ([%derive.show: pos] pos)
          )
   in
-  List.fold_right f args body
+  List.fold_left f body args
 
 (* Any internal dependency between nested signature elements needs to have an
    existential hoisted out to the outer level.
@@ -169,15 +173,13 @@ and elab_sig env s sig_pos =
                       { n = TNamed (Flat exi_var); pos }
                     else
                       let body =
-                        TLarge
-                          (TSkol
-                             ( exi_var
-                             , List.map
-                                 (fun (x, { pos; _ }) ->
-                                   { n = TNamed (Flat x); pos }
-                                 )
-                                 unis
-                             )
+                        TSkol
+                          ( exi_var
+                          , List.map
+                              (fun (x, { pos; _ }) ->
+                                { n = TNamed (Flat x); pos }
+                              )
+                              unis
                           )
                       in
                       let ({ pos; _ }, _) = c in
@@ -202,7 +204,7 @@ and elab_sig env s sig_pos =
     in
     (acc_vs @ new_vs), (after_elab :: acc_elabs), env2
   in
-  let all_vs, all_elabs, _env = List.fold_left hoist_vars ([], [], env) s in
+  let all_vs, all_elabs, env = List.fold_left hoist_vars ([], [], env) s in
   (* A signature has an unspecified row variable that is filled in when sealing
      a module.
 
@@ -210,8 +212,8 @@ and elab_sig env s sig_pos =
      to be empty, assume exi?
    *)
 
-  let res = TSig (Open { fields = (List.rev all_elabs); var = None }) in
-  all_vs, { n = TLarge res; pos = sig_pos }, env
+  let res = TRow { fields = (List.rev all_elabs); var = Absent } in
+  all_vs, { n = res; pos = sig_pos }, env
 
 let rec elab_module env decls pos =
   let f (e, memo) = function
@@ -219,13 +221,14 @@ let rec elab_module env decls pos =
        let _vs, (n, { n = te_elab; pos }), env2 = elab_transparent_type env c e in
        env2, ((n, { n = Typ_F te_elab; pos }) :: memo)
     | Let_bind ({ n; _ }, body) ->
-       let e2, elab = elab e body in
-       e2, ((n, elab) :: memo)
+       let e2 = Env.enter_level e in
+       let e3, elab = elab e2 body in
+       Env.leave_level e3, ((n, elab) :: memo)
     | Variant_decl _ ->
        failwith "No variant declarations in modules yet."
   in
   let env2, rev_decls = List.fold_left f (env, []) decls in
-  env2, { n = Record_F (Fixed (List.rev rev_decls)); pos }
+  env2, { n = Structure_F { fields = (List.rev rev_decls); var = Empty }; pos }
 
 and elab_term env e =
   match e with
@@ -238,13 +241,14 @@ and elab_term env e =
      let dot = Dot (x', { n = Ident_F (Flat n); pos = lpos }) in
      env2, { n = Ident_F dot; pos }
   | { n = Fun ( (arg, argt), body ); pos } ->
-     let env2, arg_typ =
+     let env2 = Env.enter_level env in
+     let env3, arg_typ =
        Option.map (fun t -> elab_type_expr env t) argt
-       |> Option.value ~default:(env, { n = TInfer; pos })
+       |> Option.value ~default:(let e, v = new_var env2 in e, { n = v; pos })
      in
-     let env3, arg = elab env2 arg in
-     let env4, body = elab env3 body in
-     env4, { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }
+     let env4, arg = elab env3 arg in
+     let env5, body = elab env4 body in
+     Env.leave_level env5, { n = Lam_F { arg; arg_typ = arg_typ; body }; pos }
   | { n = Mod decls; pos } ->
      elab_module env decls pos
   | { n = Seal (e, t); pos } ->
@@ -252,7 +256,6 @@ and elab_term env e =
      let env3, et = elab_type_expr env2 t in
      env3, { n = Seal_F (ee, et); pos }
   | { n = With (e, ts); pos } ->
-     (* TODO:  why am I using the opposite order of env and term?  FIXME.  *)
      let env2, ee = elab env e in
      let f (env_m, memo) (k, v) =
        let env_m2, ek = elab_type_expr env_m k in
