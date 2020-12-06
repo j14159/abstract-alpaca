@@ -1,17 +1,11 @@
-type namespace =
-  | Local of string
-  (* For dotted reference, e.g. Module.label  *)
-  | Scoped of string * namespace
-
-
 type ('a, 'b) t = {
     (* For type unification and inference.  *)
     level : int
   (* Synthetic/generated variable names. *)
   ; next_var : int
-  ; bindings : (namespace * 'a) list
+  ; bindings : (Core.identifier * 'a) list
   (* For type -> kind bindings.  *)
-  ; types : (namespace * 'b) list
+  ; types : (Core.identifier * 'b) list
   }
 
 let var_prefix = "v_"
@@ -32,14 +26,14 @@ let next_var ({ next_var; _ } as e) =
 let bind name expr ({ bindings; _ } as e) =
   { e with bindings = (name, expr) :: bindings }
 
-let local name { bindings; _ } =
-  List.assoc_opt (Local name) bindings
+let get name { bindings; _ } =
+  List.assoc_opt name bindings
 
 let bind_type name kind ({ types; _ } as e) =
   { e with types = (name, kind) :: types }
 
-let local_type name { types; _ } =
-  List.assoc_opt (Local name) types
+let get_type name { types; _ } =
+  List.assoc_opt name types
 
 let enter_level ({ level; _ } as e) =
   { e with level = level + 1 }

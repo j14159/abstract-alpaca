@@ -51,8 +51,6 @@ exception Sig_abstraction_fail of pos * pos
 (* TODO:  bad name for "you're not actually matching signatures/structures."  *)
 exception Not_signatures of pos * pos
 
-
-
 type kind =
   | KType
   | KArrow of kind * kind
@@ -105,7 +103,7 @@ and fexp =
   | Unit_F
   | Bool_F of bool
   | Ident_F of identifier
-  | Path of fexp node * fexp node
+  | Path_F of fexp node * fexp node
   | Lam_F of (fexp node, ftyp node) abs
   | Abs_F of var * fexp node
   | App_F of fexp node * fexp node
@@ -257,10 +255,10 @@ let rec type_of ?trace:(trace = default_trace) env e =
   | { n = Bool_F _; pos } ->
      trace @@ Result.ok (env, { n = TBase TBool; pos })
   | { n = Ident_F name; _ } ->
-     trace @@ Result.ok (env, Option.get (Env.local name env))
+     trace @@ Result.ok (env, Option.get (Env.get name env))
   | { n = Lam_F { arg = { n = Ident_F a; _ }; arg_typ; body }; pos } ->
      let _ = constrain_kind (kind_of env arg_typ) arg_typ in
-     let env2 = Env.bind (Local a) arg_typ env in
+     let env2 = Env.bind a arg_typ env in
      trace @@ type_of env2 body
      |> Result.map
           (fun (env3, tb) -> (env3, { n = Arrow_F (Impure, arg_typ, tb); pos }))
@@ -301,7 +299,7 @@ let rec type_of ?trace:(trace = default_trace) env e =
                       abs
                       generalized
                   in
-                  let env4 = Env.bind (Env.Local name) abs_gen env3 in
+                  let env4 = Env.bind name abs_gen env3 in
                   (Env.leave_level env4, (name, abs_gen) :: memo)
                 )
          )
@@ -336,9 +334,9 @@ and unify env t_constraint t_to_check =
   if t_constraint = t_to_check then ()
   else match t_constraint, t_to_check with
        | { n = TNamed a; _ }, b ->
-         unify env (Option.get (Env.local a env)) b
+         unify env (Option.get (Env.get a env)) b
        | a, { n = TNamed b; _ } ->
-          unify env a (Option.get (Env.local b env))
+          unify env a (Option.get (Env.get b env))
        | { n = TAbs_var (Exi _); _ }, { n = TAbs_var (Exi _); _ } ->
           failwith "Can't unify existentials."
        | _ -> raise (Failure ("Can't unify this yet:  "
@@ -407,7 +405,7 @@ and signature_match env sig_constraint candidate =
        raise (Sig_abstraction_fail (p1, p2))
     | { n = Abs_FT(a, con_body); pos }, { n = Abs_FT (b, arg_body); _ } ->
        (* TODO:  maybe kind check on a and b?  *)
-       let env2 = Env.bind (Local (var_name a)) { n = TAbs_var a; pos } env in
+       let env2 = Env.bind (var_name a) { n = TAbs_var a; pos } env in
        match_abstractions env2 con_body arg_body ((var_name b, a) :: var_memo) row_abs
     | ({ pos; _ } as remaining_constraint), ({ n = TRow _; _ } as base_arg) ->
        (* Collect the variables from the rest of the constraint:  *)
@@ -423,7 +421,7 @@ and signature_match env sig_constraint candidate =
        let rem_vars, base_constraint = collect_abst [] remaining_constraint in
        let env2 =
          List.fold_left
-           (fun e v -> Env.bind (Local (var_name v)) { n = TAbs_var v; pos } e)
+           (fun e v -> Env.bind (var_name v) { n = TAbs_var v; pos } e)
            env
            rem_vars
        in
@@ -648,7 +646,7 @@ and kind_of env t =
      Result.ok KType
   | { n = TVar v; _ } ->
      let none = Binding_not_found t in
-     Option.to_result ~none (Env.local_type v env)
+     Option.to_result ~none (Env.get_type v env)
   | { n = Arrow_F (_, a, b); _ } ->
      (* Fetch the kinds of `a` and `b`, then make sure they're both KType.  *)
      let k_a = kind_of env a in
@@ -660,7 +658,7 @@ and kind_of env t =
      if var_kind v != KType then
        Result.error (Bad_abstraction_kind pos)
      else
-       let binding_name = Env.Local (var_name v) in
+       let binding_name = var_name v in
        let env2 = Env.bind binding_name { n = TAbs_var v; pos } env
                   |> Env.bind_type binding_name KType
        in
@@ -677,7 +675,7 @@ and kind_of env t =
      (* Pull the bound type from the environment, convert it to a result so that
         a missing binding has the right error, then finally check its kind.
       *)
-     Env.local x env
+     Env.get x env
      |> Option.to_result ~none:(Binding_not_found t)
      |> Result.map (fun res -> kind_of env res)
      |> Result.join
@@ -691,7 +689,7 @@ and kind_of env t =
            (fun e ->
              let (name, not_abs) = next in
              kind_of e not_abs
-             |> Result.map (fun res -> Env.bind_type (Local name) res e)
+             |> Result.map (fun res -> Env.bind_type name res e)
            )
        )
        (Result.ok env)
@@ -699,7 +697,7 @@ and kind_of env t =
      |> Result.map (fun _ -> KType)
   | { n = TSkol (exi_v, other_vs); pos } ->
      let none = Binding_not_found { n = TVar exi_v; pos } in
-     let k_exi = Env.local_type exi_v env
+     let k_exi = Env.get_type exi_v env
                  |> Option.to_result ~none
      in
      (* Kind arrows (higher kinds) are treated as arrows in the compound types

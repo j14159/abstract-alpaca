@@ -30,14 +30,14 @@ and type_expr =
   | TE_Int
   | TE_Arrow of type_expr node * type_expr node
   | TE_Var of identifier
-  | Named of identifier
+  | TE_Named of identifier
   (* e.g. applying `type list 'x` (a functor) in `list int`
 
      TODO:  dotted application.
 
    *)
   | TE_Apply of label * type_expr node list
-  | TDot of type_expr node * label
+  | TE_Path of type_expr node * label
   | Signature of decl list
 [@@deriving show]
 
@@ -63,7 +63,7 @@ type term =
   | Fun of (expr * type_expr node option) * expr
   | Apply of expr * expr
   (* Field access, could be for a module, signature, or record:  *)
-  | Dot of term node * label
+  | Path of term node * label
   | Mod of bind list
   (* It could be argued that sealing, because it involves a type expression as
      the second argument, is itself a type expression.
@@ -99,13 +99,15 @@ let rec check_type_expr e =
      Result.bind (check_type_expr a) (fun _ -> check_type_expr b)
   | { n = TE_Var _; _ } ->
      Result.ok ()
-  | { n = Named _; _ } ->
+  | { n = TE_Named _; _ } ->
      Result.ok ()
   | { n = TE_Apply (_, exprs); _ } ->
      check_list exprs
-  | { n = TDot ({ n = Signature _; _ }, _); _ } | { n = TDot ({ n = Named _; _ }, _); _ } ->
+  (* TODO:  maybe best to defer this check to the typer.  *)
+  | { n = TE_Path ({ n = Signature _; _ }, _); _ }
+    | { n = TE_Path ({ n = TE_Named _; _ }, _); _ } ->
      Result.ok ()
-  | { n = TDot _; pos } ->
+  | { n = TE_Path _; pos } ->
      Result.error (pos, "Field access type expressions only permitted on labels and signatures.")
   | { n = Signature ds; _ } ->
      List.fold_left

@@ -31,7 +31,7 @@ and internal_elab env te =
      [], { n = TBase TBool; pos }, env
   | { n = TE_Int; pos } ->
      [], { n = TBase TInt; pos }, env
-  | { n = Named n; pos } ->
+  | { n = TE_Named n; pos } ->
      [], { n = TNamed  n; pos }, env
   | { n = TE_Var v; pos } ->
      (* This is a reference to a var, not an abstraction.  *)
@@ -236,9 +236,9 @@ and elab_term env e =
      env, { n = Unit_F; pos }
   | { n = Label l; pos } ->
      env, { n = Ident_F l; pos }
-  | { n = Core.Dot (x, { n; pos = lpos }); pos } ->
+  | { n = Core.Path (x, { n; pos = lpos }); pos } ->
      let env2, x' = elab_term env x in
-     let path = Path (x', { n = Ident_F n; pos = lpos }) in
+     let path = Path_F (x', { n = Ident_F n; pos = lpos }) in
      env2, { n = path; pos }
   | { n = Fun ( (arg, argt), body ); pos } ->
      let env2 = Env.enter_level env in

@@ -31,7 +31,7 @@ let np_v_label = v_label ~pos:null_pos
 let te_arrow ~pos a b = { n = TE_Arrow (a, b); pos }
 let np_te_arrow = te_arrow ~pos:null_pos
 
-let te_named ~pos n = { n = Named n; pos }
+let te_named ~pos n = { n = TE_Named n; pos }
 let np_te_named = te_named ~pos:null_pos
 
 let let_bind name expr = Let_bind (name, expr)
@@ -96,7 +96,7 @@ let basic_module_tests =
         let m =
           let f = np_v_fun
                     (np_v_label "b")
-                    (Some { n = Named "t"; pos = null_pos })
+                    (Some { n = TE_Named "t"; pos = null_pos })
                     (np_v_label "b")
           in
           np_str
