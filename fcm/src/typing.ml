@@ -246,12 +246,8 @@ let constrain_kind k ret =
 
 let default_trace x = x
 
-(* TODO:  it would be maybe very interesting to optionally inject a trace ID
-          here that could be used for optional logging of typing decisions.
-          "Logging" could be replaced with "instrumentation", "output",
-          "streaming", etc.
-
-          Maybe this can wrap `Result`?
+(* [trace] is very basic right now, just a function that is called with most
+   [Result.t] values as typing progresses.
  *)
 let rec type_of ?trace:(trace = default_trace) env e =
   match e with
