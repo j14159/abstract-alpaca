@@ -32,15 +32,15 @@ and internal_elab env te =
   | { n = TE_Int; pos } ->
      [], { n = TBase TInt; pos }, env
   | { n = Named n; pos } ->
-     [], { n = TNamed (Flat n); pos }, env
+     [], { n = TNamed  n; pos }, env
   | { n = TE_Var v; pos } ->
      (* This is a reference to a var, not an abstraction.  *)
-     [], { n = TNamed (Flat v); pos }, env
+     [], { n = TNamed v; pos }, env
   | { n = TE_Apply ({ n; _ }, []); pos } ->
-     [], { n = TNamed (Flat n); pos }, env
+     [], { n = TNamed n; pos }, env
   | { n = TE_Apply (n, args); pos } ->
      (* No checking here, just elaborate.  *)
-     let base = n >>- (fun l -> TNamed (Flat l)) in
+     let base = n >>- (fun l -> TNamed l) in
      let rec f = function
        | [x] ->
           let _, x, _ = internal_elab env x in
@@ -76,7 +76,7 @@ and elab_constructor ({ n = name; _ }, t_exprs) env =
     List.fold_left
       (fun (vs, elabs) next ->
         match internal_elab env next with
-        | [], ({ n = TNamed (Flat v); pos } as x), e when e = env ->
+        | [], ({ n = TNamed v; pos } as x), e when e = env ->
            let vs = (v, { n = Uni (v, KType); pos }) :: vs in
            let elabs = x :: elabs in
            vs, elabs
@@ -131,7 +131,7 @@ and make_abstraction args unis body =
   let f acc n =
     (* TODO:  positions?  *)
     match n with
-    | { n = TNamed (Flat x); pos } ->
+    | { n = TNamed x; pos } ->
        (* TODO:  real failure, not from List.assoc.  *)
        let { n = v; _ } = List.assoc x unis in
        { n = Abs_FT (v, acc); pos }
@@ -170,14 +170,14 @@ and elab_sig env s sig_pos =
          let name, unis, args = elab_constructor c env2 in
          let elab = if List.length args = 0 then
                       let ({ pos; _ }, _) = c in
-                      { n = TNamed (Flat exi_var); pos }
+                      { n = TNamed exi_var; pos }
                     else
                       let body =
                         TSkol
                           ( exi_var
                           , List.map
                               (fun (x, { pos; _ }) ->
-                                { n = TNamed (Flat x); pos }
+                                { n = TNamed x; pos }
                               )
                               unis
                           )
@@ -235,11 +235,11 @@ and elab_term env e =
   | { n = Unit; pos } ->
      env, { n = Unit_F; pos }
   | { n = Label l; pos } ->
-     env, { n = Ident_F (Flat l); pos }
+     env, { n = Ident_F l; pos }
   | { n = Core.Dot (x, { n; pos = lpos }); pos } ->
      let env2, x' = elab_term env x in
-     let dot = Dot (x', { n = Ident_F (Flat n); pos = lpos }) in
-     env2, { n = Ident_F dot; pos }
+     let path = Path (x', { n = Ident_F n; pos = lpos }) in
+     env2, { n = path; pos }
   | { n = Fun ( (arg, argt), body ); pos } ->
      let env2 = Env.enter_level env in
      let env3, arg_typ =

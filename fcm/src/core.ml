@@ -12,7 +12,10 @@ type 'n node = { n : 'n
                }
 [@@deriving show]
 
-type label = string node
+type identifier = string
+[@@deriving show]
+
+type label = identifier node
 [@@deriving show]
 
 (* Starting with a label introduces a syntactic restriction to avoid
@@ -26,8 +29,8 @@ and type_expr =
   | TE_Bool
   | TE_Int
   | TE_Arrow of type_expr node * type_expr node
-  | TE_Var of string
-  | Named of string
+  | TE_Var of identifier
+  | Named of identifier
   (* e.g. applying `type list 'x` (a functor) in `list int`
 
      TODO:  dotted application.

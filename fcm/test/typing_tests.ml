@@ -135,7 +135,7 @@ let sealing_tests =
           { n = Abs_FT
                   ( Exi ("v_0", KType)
                   , { n = TRow
-                            { fields = [("t", { n = TNamed (Flat "v_0"); pos = null_pos })]
+                            { fields = [("t", { n = TNamed "v_0"; pos = null_pos })]
                             ; var = Absent
                             }
                     ; pos = null_pos

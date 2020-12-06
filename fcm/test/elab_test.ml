@@ -20,7 +20,7 @@ let assert_ftyp_eq = assert_equal ~printer:([%derive.show: ftyp node])
 let null_node x = { n = x; pos = null_pos }
 let tbase b = null_node (TBase b)
 let tvar n = null_node (TVar n)
-let tnamed n = null_node (TNamed (Flat n))
+let tnamed n = null_node (TNamed n)
 let tarrow eff x y = null_node (Arrow_F (eff, x, y))
 let tsig fs = null_node (TRow { fields = fs; var = Absent })
 let tabs v e = null_node (Abs_FT (v, e))
@@ -30,7 +30,7 @@ let uni n k = Uni (n, k)
 let exi n k = Exi (n, k)
 
 let abs var body = { n = Abs_F (var, body); pos = null_pos }
-let ident n = null_node (Ident_F (Flat n))
+let ident n = null_node (Ident_F n)
 let app a b = null_node (App_F (a, b))
 
 let str_sig ~pos decls = { n = Signature decls; pos }

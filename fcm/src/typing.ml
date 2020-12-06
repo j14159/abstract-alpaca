@@ -31,7 +31,7 @@ open Core
  *)
 exception Predicativity_violation of pos
 
-type row_label = string
+type row_label = identifier
 [@@deriving show]
 
 exception Strict_row_size of (row_label list * pos)
@@ -58,7 +58,7 @@ type kind =
   | KArrow of kind * kind
 [@@deriving show]
 
-type var_name = string
+type var_name = identifier
 [@@deriving show]
 
 type var =
@@ -100,15 +100,12 @@ type base_typ =
 
 type ('arg, 'arg_typ) abs = { arg : 'arg; arg_typ : 'arg_typ; body : fexp node }
 
-and ident =
-  | Dot of fexp node * fexp node
-  | Flat of var_name
-
 (* System F-Omega expressions.  *)
 and fexp =
   | Unit_F
   | Bool_F of bool
-  | Ident_F of ident
+  | Ident_F of identifier
+  | Path of fexp node * fexp node
   | Lam_F of (fexp node, ftyp node) abs
   | Abs_F of var * fexp node
   | App_F of fexp node * fexp node
@@ -138,7 +135,7 @@ and ftyp =
   (* Track universals and existentials as legitimate types.  *)
   | TAbs_var of var
   | TBase of base_typ
-  | TNamed of ident
+  | TNamed of identifier
   | Abs_FT of var * ftyp node
   | Arrow_F of eff * ftyp node * ftyp node
   | TSkol of var_name * (ftyp node list)
@@ -153,7 +150,7 @@ and ftyp =
 and level = int
 [@@deriving show]
 and infer_cell =
-  | Unbound of string * level
+  | Unbound of identifier * level
   (* Tracking of the location where the `infer_cell` was first introduced should
      be handled by the `ftyp node` that encloses this cell.  The link variant
      here requires `ftyp node` as well so that we can track where the inferred
@@ -259,9 +256,9 @@ let rec type_of ?trace:(trace = default_trace) env e =
      trace @@ Result.ok (env, { n = TBase TUnit; pos })
   | { n = Bool_F _; pos } ->
      trace @@ Result.ok (env, { n = TBase TBool; pos })
-  | { n = Ident_F (Flat name); _ } ->
+  | { n = Ident_F name; _ } ->
      trace @@ Result.ok (env, Option.get (Env.local name env))
-  | { n = Lam_F { arg = { n = Ident_F (Flat a); _ }; arg_typ; body }; pos } ->
+  | { n = Lam_F { arg = { n = Ident_F a; _ }; arg_typ; body }; pos } ->
      let _ = constrain_kind (kind_of env arg_typ) arg_typ in
      let env2 = Env.bind (Local a) arg_typ env in
      trace @@ type_of env2 body
@@ -338,9 +335,9 @@ let rec type_of ?trace:(trace = default_trace) env e =
 and unify env t_constraint t_to_check =
   if t_constraint = t_to_check then ()
   else match t_constraint, t_to_check with
-       | { n = TNamed (Flat a); _ }, b ->
+       | { n = TNamed a; _ }, b ->
          unify env (Option.get (Env.local a env)) b
-       | a, { n = TNamed (Flat b); _ } ->
+       | a, { n = TNamed b; _ } ->
           unify env a (Option.get (Env.local b env))
        | { n = TAbs_var (Exi _); _ }, { n = TAbs_var (Exi _); _ } ->
           failwith "Can't unify existentials."
@@ -478,7 +475,7 @@ and signature_match env sig_constraint candidate =
                vs2
 
          end
-    | { n = TNamed (Flat _vn); _ }, _ ->
+    | { n = TNamed _vn; _ }, _ ->
        (* TODO:  make sure the above variable or type name is valid!  *)
        Result.ok ()
 
@@ -676,7 +673,7 @@ and kind_of env t =
             )
   | { n = TAbs_var v; _ } -> Result.ok (var_kind v)
   | { n = TBase _; _ } -> Result.ok KType
-  | { n = TNamed Flat x; _ } ->
+  | { n = TNamed x; _ } ->
      (* Pull the bound type from the environment, convert it to a result so that
         a missing binding has the right error, then finally check its kind.
       *)
