@@ -2,6 +2,8 @@ open OUnit2
 open Fcm.Core
 open Fcm.Typing
 
+open Ast.F_ast
+
 let lit_row ~pos fields = { n = { fields; var = Absent }; pos }
 let np_lit_row = lit_row ~pos:null_pos
 
@@ -25,7 +27,7 @@ let suite =
                  let row_identity (r : {}) = r in
                  row_identity { x = true }
            *)
-          let member = ("x", Elab_test.tbase TBool) in
+          let member = ("x", tbase TBool) in
           let expr = np_lit_row [member] in
           let bound = np_lit_row [] in
           let res = unify_row (Fcm.Env.make ()) bound expr in
@@ -41,7 +43,7 @@ let suite =
                 get_x { x = 1 }
            *)
 
-          let member = ("x", Elab_test.tbase TBool) in
+          let member = ("x", tbase TBool) in
           let expr = np_lit_row [member] in
           let bound = np_lit_row [member] in
           let res = unify_row (Fcm.Env.make ()) bound expr in
@@ -55,9 +57,9 @@ let suite =
                  let get_x { x } = x in
                  get_x { y = true, z = false }
            *)
-          let bound = np_lit_row [("x", Elab_test.tbase TBool)] in
-          let expr = np_lit_row [ ("y", Elab_test.tbase TBool)
-                                ; ("z", Elab_test.tbase TBool) ]
+          let bound = np_lit_row [("x", tbase TBool)] in
+          let expr = np_lit_row [ ("y", tbase TBool)
+                                ; ("z", tbase TBool) ]
           in
           assert_raises
             (Missing_row_field (null_pos, "x"))

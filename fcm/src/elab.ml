@@ -4,20 +4,22 @@
 open Core
 open Typing
 
+let make_abs vs node pos =
+  let f (_name, var) acc =
+    (* TODO:  I'm using the position for the whole type expression here but
+              should be using the position for each argument.
+     *)
+    Abs_FT (var, { n = acc; pos = pos })
+  in
+  List.fold_right f vs (node)
+
 let rec elab_type_expr env te =
   (* `vs` must be `(string, var) list`  *)
   let vs, res, env = internal_elab env te in
   if List.length vs = 0 then
     env, res
   else
-    let f (_name, var) acc =
-      (* TODO:  I'm using the position for the whole type expression here but
-                should be using the position for each argument.
-       *)
-      Abs_FT (var, { n = acc; pos = te.pos })
-    in
-    let res' = List.fold_right f vs (res.n) in
-    env, { n = res'; pos = te.pos }
+    env, { n = make_abs vs res.n te.pos; pos = te.pos }
 
 (* Just trying this out.  *)
 and (>>-) { n; pos } f = { n = f n; pos }
@@ -58,8 +60,16 @@ and internal_elab env te =
      vs1 @ vs2, { n = Arrow_F (Impure, elab_a, elab_b); pos }, env3
   | { n = Signature  decls; pos } ->
      elab_sig env decls pos
-  | { n; _ } ->
-     failwith ("Cannot yet elaborate this type:  " ^ ([%derive.show: type_expr] n))
+  | { n = TE_Path (a, { n = b; pos = b_pos } ); pos } ->
+     (* The root of the path might be a signature, we don't want the
+        existentials to be mistakenly wrapped around the path, so isolate them
+        into the elaboration of `a`:
+      *)
+     let vs1, elab_a, env2 = internal_elab env a in
+     let abs_a = make_abs vs1 elab_a.n elab_a.pos in
+     let elab_a = { n = abs_a; pos = elab_a.pos } in
+     let vs2, elab_b, env3 = internal_elab env2 { n = TE_Named b; pos = b_pos } in
+     vs2, { n = Path_FT (elab_a, elab_b); pos }, env3
 
 (* Elaborate each of a type constructor's parameters, collect all variable
    names for an enclosing type abstraction, return a tuple of name,
@@ -105,6 +115,8 @@ and elab_transparent_type env constr t_expr =
 
      FIXME:  elab_constructor will fail internally if an argument is not
      a type variable.  This feels opaque and bad maybe?
+
+     FIXME:  vs might have existentials for a signature?
    *)
   let name, unis, args = elab_constructor constr env in
   let vs, res, env2 = internal_elab env t_expr in
@@ -114,12 +126,30 @@ and elab_transparent_type env constr t_expr =
          x
       | { n = TBase _; _ } as x ->
          x
+      | { n = Path_FT _; _ } as x ->
+         x
+      | { n = TRow _; _ } as x ->
+         x
+      | { n = TNamed _; _ } as x ->
+         x
       | other ->
          (* TODO:  proper elaboration expression.  *)
          failwith ("Can't use " ^ ([%derive.show: ftyp node] other) ^ " for type body")
     in
+    (* Add `for_all` for each referenced universal.
+
+       TODO:  better description.
+     *)
     let elab = make_abstraction args unis body in
-    vs, (name, elab), env2
+    let abs = List.fold_left
+                (* FIXME:  shouldn't the existentials' positions point to the
+                           abstract types that introduce them?
+                 *)
+                (fun acc (_, v) -> { n = Abs_FT (v, acc); pos = t_expr.pos })
+                elab
+                vs
+    in
+    vs, (name, abs), env2
   end
 
 (* Transparent and Opaque type constructors both need to make type
@@ -237,7 +267,7 @@ and elab_term env e =
   | { n = Label l; pos } ->
      env, { n = Ident_F l; pos }
   | { n = Core.Path (x, { n; pos = lpos }); pos } ->
-     let env2, x' = elab_term env x in
+     let env2, x' = elab env x in
      let path = Path_F (x', { n = Ident_F n; pos = lpos }) in
      env2, { n = path; pos }
   | { n = Fun ( (arg, argt), body ); pos } ->

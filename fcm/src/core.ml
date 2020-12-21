@@ -37,7 +37,7 @@ and type_expr =
 
    *)
   | TE_Apply of label * type_expr node list
-  | TE_Path of type_expr node * label
+  | TE_Path of type_expr node  * label
   | Signature of decl list
 [@@deriving show]
 
@@ -63,7 +63,7 @@ type term =
   | Fun of (expr * type_expr node option) * expr
   | Apply of expr * expr
   (* Field access, could be for a module, signature, or record:  *)
-  | Path of term node * label
+  | Path of expr * label
   | Mod of bind list
   (* It could be argued that sealing, because it involves a type expression as
      the second argument, is itself a type expression.

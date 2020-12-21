@@ -17,3 +17,12 @@ val enter_level : ('a, 'b) t -> ('a, 'b) t
 val leave_level : ('a, 'b) t -> ('a, 'b) t
 
 val next_level : ('a, 'b) t -> (('a, 'b) t -> (('a, 'b) t * 'b)) -> (('a, 'b) t * 'b)
+
+val bindings : ('a, 'b) t -> (Core.identifier * 'a) list
+
+(* This type is mostly just here to make the "deriving" ppx happy.  *)
+val pp : (Format.formatter -> 'a -> unit) ->
+         (Format.formatter -> 'b -> unit) ->
+         Format.formatter ->
+         ('a, 'b) t ->
+         unit

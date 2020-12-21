@@ -7,43 +7,14 @@ open Fcm.Core
 open Fcm.Elab
 open Fcm.Typing
 
+open Ast
+open Ast.F_ast
+
 open OUnit2
 
 let fexp_node_printer = [%derive.show: fexp node]
 let assert_fexp_eq = assert_equal ~printer:fexp_node_printer
 let assert_ftyp_eq = assert_equal ~printer:([%derive.show: ftyp node])
-
-(* Convenience methods for the System F AST.  They're here as a sort of
-   prototyping/staging area and will move somewhere like src/typing.ml
-   later.
- *)
-let null_node x = { n = x; pos = null_pos }
-let tbase b = null_node (TBase b)
-let tvar n = null_node (TVar n)
-let tnamed n = null_node (TNamed n)
-let tarrow eff x y = null_node (Arrow_F (eff, x, y))
-let tsig fs = null_node (TRow { fields = fs; var = Absent })
-let tabs v e = null_node (Abs_FT (v, e))
-let tapp x y = null_node (TApp (x, y))
-let tskol a vs = null_node (TSkol (a, vs))
-let uni n k = Uni (n, k)
-let exi n k = Exi (n, k)
-
-let abs var body = { n = Abs_F (var, body); pos = null_pos }
-let ident n = null_node (Ident_F n)
-let app a b = null_node (App_F (a, b))
-
-let str_sig ~pos decls = { n = Signature decls; pos }
-let np_str_sig = str_sig ~pos:null_pos
-
-let constr ~pos name args = ({ n = name; pos }, args)
-let np_constr = constr ~pos:null_pos
-
-let t_var ~pos name = { n = TE_Var name; pos }
-let np_t_var = t_var ~pos:null_pos
-
-let opaque_decl constr = Opaque_type constr
-let val_decl name body = Val_bind (name, body)
 
 (* The very basic elaboration tests.  *)
 let test_simple_sig_elab =
@@ -309,6 +280,46 @@ let valid_functor_gen_test =
          false
     )
 
+let embedded_sig_tests =
+  let open Ast.Null_pos_core in
+  [ "Embedding a signature in a module and referring to it." >::
+      (fun _ ->
+        (*
+          m = { type a = { type t }
+                type b = a
+              }
+         *)
+        let m = np_str
+                  [ type_decl
+                      (np_constr "a" [])
+                      (np_str_sig [opaque_decl (np_constr "t" [])])
+                  ; type_decl
+                      (np_constr "b" [])
+                      (np_te_named "a")
+                  ]
+        in
+        let expected =
+          { n = Structure_F
+                  { fields = [ "a"
+                             , { n = Typ_F (tabs (exi "v_0" KType) (tsig ["t", tnamed "v_0"])).n
+                               ; pos = null_pos
+                               }
+                             ; "b"
+                             , { n = Typ_F (tnamed "a").n; pos = null_pos }
+                             ]
+                  (* Empty row variable because it's a module literal, not a
+                     type.
+                   *)
+                  ; var = Empty
+                  }
+          ; pos = null_pos
+          }
+        in
+        let _, res = elab (Fcm.Env.make ()) (Term m) in
+        assert_fexp_eq expected res
+      )
+
+  ]
 let valid_module_gen_test =
   let open QCheck in
   QCheck.Test.make
@@ -343,6 +354,7 @@ let suite =
       ; "Transparent type using a local opaque type." >:: test_transparent_and_opaque_type
       ; QCheck_ounit.to_ounit2_test property_sig_elab_test
       ]
+      @ embedded_sig_tests
 
 let _ =
   run_test_tt_main suite

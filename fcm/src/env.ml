@@ -7,6 +7,7 @@ type ('a, 'b) t = {
   (* For type -> kind bindings.  *)
   ; types : (Core.identifier * 'b) list
   }
+[@@deriving show]
 
 let var_prefix = "v_"
 
@@ -43,3 +44,5 @@ let leave_level ({ level; _ } as e) =
 let next_level ({ level; _ } as env) f =
   let e2, res = f { env with level = level + 1 } in
   { e2 with level }, res
+
+let bindings { bindings; _ } = bindings

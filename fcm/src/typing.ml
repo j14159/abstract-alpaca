@@ -134,6 +134,7 @@ and ftyp =
   | TAbs_var of var
   | TBase of base_typ
   | TNamed of identifier
+  | Path_FT of ftyp node * ftyp node
   | Abs_FT of var * ftyp node
   | Arrow_F of eff * ftyp node * ftyp node
   | TSkol of var_name * (ftyp node list)
@@ -176,8 +177,12 @@ type substitution_error =
 [@@deriving show]
 
 type typing_error =
-  (* TODO:  this should probably take position and label?  *)
+  (* TODO:  this should probably take position and label?  It definitely needs
+            to have more of the "why was this binding being looked for?"
+   *)
   | Binding_not_found of ftyp node
+  | Invalid_type of ftyp node
+  | Invalid_type_var of ftyp node
   (* Raised when an abstraction variable (universal or existential) does not have
      the kind [KType].
 
@@ -197,7 +202,17 @@ type typing_error =
        to a function (functor).  This exception is thrown if an "open" module makes
        it to the typer.
     *)
-   | Unexpected_open_structure of pos
+  | Unexpected_open_structure of pos
+  (* TODO:  need a more narrow way to point to the reason, e.g. the exact
+     missing abstract type.
+   *)
+  | Invalid_path of ftyp node
+  (* When we expect a row (signature, record) but don't get one.
+
+     Returned when a sealing operation tries to seal with something that isn't
+     a row.
+   *)
+  | Not_a_row of ftyp node
 [@@deriving show]
 
 let invalid_substitution a b = Signature_match_error (Invalid_substitution (a, b))
@@ -239,7 +254,7 @@ let constrain_kind k ret =
      | arrow -> Result.error (Bad_higher_kind (ret, arrow))
     )
 
-let default_trace x = x
+let default_trace _label x = x
 
 (* [trace] is very basic right now, just a function that is called with most
    [Result.t] values as typing progresses.
@@ -249,20 +264,21 @@ let rec type_of ?trace:(trace = default_trace) env e =
   | { n = Typ_F t; pos } ->
      kind_of env { n = t; pos }
      |> Result.map (fun _ -> (env, { n = t; pos}))
-     |> trace
+     |> trace "Type expression"
   | { n = Unit_F; pos } ->
-     trace @@ Result.ok (env, { n = TBase TUnit; pos })
+     trace "" @@ Result.ok (env, { n = TBase TUnit; pos })
   | { n = Bool_F _; pos } ->
-     trace @@ Result.ok (env, { n = TBase TBool; pos })
+     trace "" @@ Result.ok (env, { n = TBase TBool; pos })
   | { n = Ident_F name; _ } ->
-     trace @@ Result.ok (env, Option.get (Env.get name env))
+     (* TODO:  binding errors?  *)
+     trace "Identifier" @@ Result.ok (env, Option.get (Env.get name env))
   | { n = Lam_F { arg = { n = Ident_F a; _ }; arg_typ; body }; pos } ->
      let _ = constrain_kind (kind_of env arg_typ) arg_typ in
      let env2 = Env.bind a arg_typ env in
-     trace @@ type_of env2 body
+     trace "Lambda abstraction body" @@ type_of env2 body
      |> Result.map
           (fun (env3, tb) -> (env3, { n = Arrow_F (Impure, arg_typ, tb); pos }))
-     |> trace
+     |> trace "Lambda abstraction (full)"
 
   (* Only variables marked as "empty" can be typed for structures since as
      an expression, they're always literal and never a pattern or type.
@@ -277,7 +293,7 @@ let rec type_of ?trace:(trace = default_trace) env e =
          acc
          (fun (env, memo) ->
            let env2 = Env.enter_level env in
-           trace @@ type_of env2 next_decl
+           trace ("Structure declaration:  " ^ name) @@ type_of env2 next_decl
            |> Result.map (fun (env3, typ) ->
                   let to_abstract, generalized = gen env3 typ in
                   (* TODO:  efficiency, or just find something off-the-shelf.
@@ -299,33 +315,93 @@ let rec type_of ?trace:(trace = default_trace) env e =
                       abs
                       generalized
                   in
+                  (* Bind existentials in the environment.
+
+                     These would result from sealed modules inside this module.
+                     Module bindings need to populate the environment with their
+                     existentials so that paths referencing abstract types inside
+                     this structure can safely refer to them.  Exporting
+                     /outside/ of this module (outside of the "ambient
+                     environment") will then produce invalid types, as expected.
+
+                     This function in particular is doing double-duty, both]
+                     binding existentials in the given environment as well as
+                     detecting whether or not the type is an actual structure
+                     (module).  The reason for this is that in order to know
+                     whether or not the declaration is a literal structure
+                     (a module), we have to iterate through all of the enclosing
+                     abstractions introduced by sealing so that we can check
+                     for the presence of an `Empty` row variable.  Rather than
+                     overloading elaboration elsewhere to report on the presence
+                     or absence of a contained structure, I'm isolating it here.
+
+                     TODO:  "there's a structure here" seems like something
+                            that could be captured by even a rudimentary effect
+                            system.
+                   *)
+
+                  let rec exi_folder e = function
+                    | { n = Abs_FT (Uni _, body); _ } ->
+                       exi_folder e body
+                    | { n = Abs_FT (Exi (v, k), body); pos } ->
+                       let e2 = Env.bind_type v k e
+                                |> Env.bind v { n = TAbs_var (Exi (v, k)); pos }
+                                |> Env.bind_type v KType
+                       in
+                       exi_folder e2 body
+                    | { n = TRow { var = Empty; _ }; _ } ->
+                       (* Found an actual structure:  *)
+                       true, e
+                    | _ ->
+                       false, e
+                  in
                   let env4 = Env.bind name abs_gen env3 in
-                  (Env.leave_level env4, (name, abs_gen) :: memo)
+                  let is_structure, env5 = exi_folder env4 abs_gen in
+                  let ret_env = if is_structure then env5 else env4 in
+                  (Env.leave_level ret_env, (name, abs_gen) :: memo)
                 )
          )
      in
      List.fold_left f (Result.ok (env, [])) decls
      |> Result.map
           (fun (env2, rev_types) ->
-            let typ = { n = TRow { fields = List.rev rev_types; var = Absent }; pos } in
-            (* TODO:  I'd love to optionally log typing decisions somewhere.  *)
+            let typ = { n = TRow { fields = List.rev rev_types; var = Empty }; pos } in
             env2, typ
           )
-     |> trace
+     |> trace "Structure defined"
   | { n = Structure_F { var = Absent; _ }; pos } ->
-     trace @@ Result.error (Unexpected_open_structure pos)
-  | { n = Seal_F (expr, seal_with); pos } ->
+     trace "Structure definition failure" @@ Result.error (Unexpected_open_structure pos)
+  | { n = Seal_F (expr, seal_with); _ } ->
      let match_pass (env2, term_typ) =
        signature_match env2 seal_with term_typ
        |> Result.map
-            (* Discard the row variable because we're sealing:  *)
+            (* Discard the row variable because we're sealing, and set the
+               result's variable to `Empty`:
+             *)
             ( fun _ ->
-              let { n; _ } = seal_with in
-              env2, { n; pos }
+              (* TODO:  factor this out?  *)
+              let rec empty_row = function
+                | { n = Abs_FT (v, body); pos } ->
+                   empty_row body
+                   |> Result.map (fun b -> { n = Abs_FT (v, b); pos })
+                | { n = TRow { fields; _ }; pos } ->
+                   Result.ok { n = TRow { fields; var = Empty }; pos }
+                | { n = TNamed name; _ } as x ->
+                   let s = Env.get name env2
+                           |> Option.to_result ~none:(Binding_not_found x)
+                   in
+                   Result.bind s empty_row
+                | non_row ->
+                   Result.error (Not_a_row non_row)
+              in
+              Result.map (fun x -> env2, x) (empty_row seal_with)
             )
-       |> trace
+       |> Result.join
+       |> trace "Sealing result"
      in
-     trace @@ Result.bind (type_of env expr) match_pass
+     let to_match = type_of env expr
+                    |> trace "Structure to seal"
+     in Result.bind to_match match_pass
 
   | { n = other; _ } ->
      failwith ("Can't type this yet:  " ^ ([%derive.show: fexp] other))
@@ -414,9 +490,12 @@ and signature_match env sig_constraint candidate =
             collect_abst (v :: memo) body
          | { n = TRow _; _ } as base ->
             memo, base
+         | { n = TNamed name; _ } ->
+            (* TODO:  real "not found" error.  *)
+            collect_abst memo (Option.get @@ Env.get name env)
          | _other ->
             (* TODO:  usable error.  *)
-            failwith "Not matching signature at base case."
+            failwith ("Not matching signature at base case.\n" ^ ([%derive.show: ftyp node] _other))
        in
        let rem_vars, base_constraint = collect_abst [] remaining_constraint in
        let env2 =
@@ -645,7 +724,7 @@ and kind_of env t =
   | { n = TInfer _; _ } ->
      Result.ok KType
   | { n = TVar v; _ } ->
-     let none = Binding_not_found t in
+     let none = Invalid_type_var t in
      Option.to_result ~none (Env.get_type v env)
   | { n = Arrow_F (_, a, b); _ } ->
      (* Fetch the kinds of `a` and `b`, then make sure they're both KType.  *)
@@ -655,6 +734,8 @@ and kind_of env t =
      |> check_kind2 a b
 
   | { n = Abs_FT (v, body); pos } ->
+     (* TODO:  trace this commented line?  *)
+     (* print_endline ((var_name v) ^ ([%derive.show: ftyp node] body)); *)
      if var_kind v != KType then
        Result.error (Bad_abstraction_kind pos)
      else
@@ -676,11 +757,26 @@ and kind_of env t =
         a missing binding has the right error, then finally check its kind.
       *)
      Env.get x env
-     |> Option.to_result ~none:(Binding_not_found t)
+     |> Option.to_result ~none:(Invalid_type t)
      |> Result.map (fun res -> kind_of env res)
      |> Result.join
 
-  | { n = TRow { fields; var = Absent }; _ } ->
+  | { n = TRow { fields; var }; pos } ->
+     let flatten_var v result =
+       match v with
+       | Present (vs, row) ->
+          let inner_row =
+            List.fold_left
+              (fun acc v -> { n = Abs_FT (v, acc); pos })
+              { n = TRow row; pos }
+              vs
+          in
+          Result.bind result (fun _ -> kind_of env inner_row)
+       | Absent ->
+          result
+       | Empty ->
+          result
+     in
      (* TODO:  handle the row variable.  *)
      List.fold_left
        (fun e next ->
@@ -695,8 +791,9 @@ and kind_of env t =
        (Result.ok env)
        fields
      |> Result.map (fun _ -> KType)
+     |> flatten_var var
   | { n = TSkol (exi_v, other_vs); pos } ->
-     let none = Binding_not_found { n = TVar exi_v; pos } in
+     let none = Invalid_type { n = TVar exi_v; pos } in
      let k_exi = Env.get_type exi_v env
                  |> Option.to_result ~none
      in
@@ -717,7 +814,36 @@ and kind_of env t =
            )
      in
      List.fold_left fold_f k_exi other_vs
-
+  | { n = Path_FT (a, b); _ } ->
+     let element = match b with
+       | { n = TNamed n; _ } -> Result.ok n
+       | x -> Result.error (Invalid_path x)
+     in
+     (* Pull named things out of rows.  *)
+     let rec type_path n = function
+       | { n = Abs_FT (Exi _, b); _ } ->
+          type_path n b
+       | { n = TRow { fields; _ }; _ } ->
+          List.assq_opt n fields
+          |> Option.to_result ~none:(Binding_not_found a)
+          |> Result.map (fun x -> kind_of env x)
+       | { n = TNamed lookup_name; _ } as node ->
+          let lookup =
+            Option.to_result
+              ~none:(Binding_not_found node)
+              (Env.get lookup_name env)
+          in
+          Result.bind lookup (fun x -> type_path n x)
+       | x -> Result.error (Invalid_path x)
+     in
+     kind_of env a
+     |> Result.map
+          (function
+           | KType -> Result.bind element (fun e -> type_path e a)
+           | k -> Result.error (Bad_higher_kind (a, k))
+          )
+     |> Result.join
+     |> Result.join
   | other ->
      failwith ("Can't evaluate this type expression:  " ^ ([%derive.show: ftyp node] other))
 

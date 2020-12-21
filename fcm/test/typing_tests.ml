@@ -4,49 +4,24 @@ open Fcm.Typing
 
 open OUnit2
 
+open Ast
+open Ast.Null_pos_core
+open Ast.F_ast
+
 open Elab_test
-
-let str ~pos decls = { n = Mod decls; pos }
-let np_str = str ~pos:null_pos
-
-let type_decl constr t_expr = Type_decl (constr, t_expr)
-
-let t_unit ~pos = { n = TE_Unit; pos }
-let np_t_unit = t_unit ~pos:null_pos
-let t_bool ~pos = { n = TE_Bool; pos }
-let np_t_bool = t_bool ~pos:null_pos
-let t_int ~pos = { n = TE_Int; pos }
-let np_t_int = t_int ~pos:null_pos
-
-let bind ~pos name expr = Let_bind ({ n = name; pos }, expr)
-let np_bind = bind ~pos:null_pos
-
-let v_bool ~pos b = Term { n = b; pos }
-let np_v_bool = v_bool ~pos:null_pos
-let v_fun ~pos arg arg_t body = Term { n = Fun ((arg, arg_t), body); pos }
-let np_v_fun = v_fun ~pos:null_pos
-let v_label ~pos l = Term { n = Label l; pos }
-let np_v_label = v_label ~pos:null_pos
-
-let te_arrow ~pos a b = { n = TE_Arrow (a, b); pos }
-let np_te_arrow = te_arrow ~pos:null_pos
-
-let te_named ~pos n = { n = TE_Named n; pos }
-let np_te_named = te_named ~pos:null_pos
-
-let let_bind name expr = Let_bind (name, expr)
-let v_fun ~pos a a_typ b = { n = Fun ((a, a_typ), b); pos }
-let np_t_fun = v_fun ~pos:null_pos
 
 let elab_and_type ?trace:(trace = default_trace) env term =
   let env2, et = elab env term in
   type_of ~trace env2 et
 
+
 let debug_elab_and_type =
-  let trace x =
+  let trace label x =
     let _ = match x with
-      | Result.Ok (_, x) -> print_endline ([%derive.show: ftyp node] x)
-      | Result.Error e -> print_endline ([%derive.show: typing_error] e)
+      | Result.Ok (_, x) ->
+         print_endline (label ^ "\n" ^ ([%derive.show: ftyp node] x))
+      | Result.Error e ->
+         print_endline (label ^ "\n" ^ ([%derive.show: typing_error] e))
     in
     x
   in
@@ -59,7 +34,7 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = Result.get_ok @@ type_of env elab_m in
         assert_ftyp_eq
-          ({ n = TRow {fields = []; var = Absent}; pos = null_pos })
+          ({ n = TRow {fields = []; var = Empty}; pos = null_pos })
           mt
       )
   (*
@@ -77,8 +52,12 @@ let basic_module_tests =
         let env, elab_m = elab (Fcm.Env.make ()) (Term m) in
         let _, mt = Result.get_ok @@ type_of env elab_m in
         let expected =
-          { n = TRow { fields = ["f", tabs (uni "v_0" KType) (tarrow Impure (tvar "v_0") (tvar "v_0")) ]
-                     ; var = Absent
+          { n = TRow { fields = [ "f"
+                                , tabs
+                                    (uni "v_0" KType)
+                                    (tarrow Impure (tvar "v_0") (tvar "v_0"))
+                                ]
+                     ; var = Empty
                   }
           ; pos = null_pos
           }
@@ -110,7 +89,7 @@ let basic_module_tests =
           { n = TRow { fields = [ "t", tbase TBool
                                 ; "f", tarrow Impure (tnamed "t") (tnamed "t")
                                 ]
-                     ; var = Absent
+                     ; var = Empty
                   }
           ; pos = null_pos
           }
@@ -136,7 +115,7 @@ let sealing_tests =
                   ( Exi ("v_0", KType)
                   , { n = TRow
                             { fields = [("t", { n = TNamed "v_0"; pos = null_pos })]
-                            ; var = Absent
+                            ; var = Empty
                             }
                     ; pos = null_pos
                     }
@@ -174,7 +153,7 @@ let sealing_tests =
                                            ; pos = null_pos
                                            }
                                        )]
-                            ; var = Absent
+                            ; var = Empty
                             }
                     ; pos = null_pos
                     }
@@ -282,6 +261,7 @@ let sealing_tests =
           tabs
             (exi "v_2" KType)
             (tsig
+               ~row:Empty
                [ "t", tnamed "v_2"
                ; "id", tarrow Impure (tnamed "t") (tnamed "t")
                ]
@@ -322,6 +302,7 @@ let sealing_tests =
           tabs
             (exi "v_1" KType)
             (tsig
+               ~row:Empty
                [ "t", tnamed "v_1"
                ; "id", tarrow Impure (tnamed "t") (tnamed "t")
                ]
@@ -355,28 +336,157 @@ let sealing_tests =
         let res = elab_and_type (Fcm.Env.make ()) sealed in
         assert_equal true (Result.is_error res);
         let res = Result.get_error @@ res in
-        let expected = Binding_not_found (tnamed "q") in
+        let expected = Invalid_type (tnamed "q") in
         assert_equal expected res ~printer:[%derive.show: typing_error]
       )
-  ; "Invalid sealing of a module with a polymorphic function" >::
+  ; "Sealing a 2-type function including a universal" >::
       (fun _ ->
         (*
-          Hrm.../is/ this invalid?  `f` in the module could be instantiated
-          with `int`.  What's the case I'm actually worried about?
+          I was initially concerned that this should be an error, but then
+          realized that there's nothing wrong with further restricting the
+          type of `f` in the module.  I suspect I need to treat this more
+          correctly with instantiation of the arrow, though.
 
             { type t = int
               -- for_all 'a: int -> 'a -> int
               let f (x : int) y = x
             } :> { type t; val f : t -> t -> t }
          *)
-        ()
+        let s_t = np_te_named "t" in
+        let s = np_str_sig
+                  [ opaque_decl (np_constr "t" [])
+                  ; val_decl
+                      (null_node "f")
+                      (np_te_arrow s_t (np_te_arrow s_t s_t))
+                  ]
+        in
+        let m = np_str
+                  [ type_decl (np_constr "t" []) np_t_int
+                  ; let_bind
+                      (null_node "f")
+                      (np_v_fun
+                         (np_v_label "x")
+                         (Option.some np_t_int)
+                         (np_v_fun (np_v_label "y") Option.none (np_v_label "x"))
+                      )
+                  ]
+        in
+        let sealed = Term { n = Seal (m, s); pos = null_pos } in
+        let _, res = Result.get_ok @@ elab_and_type (Fcm.Env.make ()) sealed in
+        let expected = tabs
+                         (exi "v_1" KType)
+                         (tsig
+                            ~row:Empty
+                            [ "t", tnamed "v_1"
+                            ; "f", tarrow
+                                     Impure
+                                     (tnamed "t")
+                                     (tarrow Impure (tnamed "t") (tnamed "t"))
+                         ])
+        in
+        assert_ftyp_eq expected res
       )
   ]
 
+(* Testing success and error cases for paths, projecting types and values out of
+   rows.
+
+   I'm aiming more for the F-ing functors/modules approach here which permits
+   more than the projection only of fully formed signatures.
+ *)
+let path_tests =
+  [ "Projection of an existential inside its enclosing module." >::
+      (fun _ ->
+        (* This should fail because `a.t` is not a real type, can't project
+           a type out of a signature, only a module.
+
+             { type a = { type t }
+               type b = a.t
+             }
+         *)
+        let m = np_str
+          [ type_decl
+              (np_constr "a" [])
+              (np_str_sig [opaque_decl (np_constr "t" [])])
+          ; type_decl
+              (np_constr "b" [])
+              { n = TE_Path (np_te_named "a", null_node "t"); pos = null_pos }
+          ]
+        in
+        let res = elab_and_type (Fcm.Env.make ()) (Term m) in
+        (* TODO:  check error.  *)
+        assert_equal true (Result.is_error res)
+      )
+  ; "Projection of an internal module's type within its enclosing module" >::
+      (fun _ ->
+        (*
+          { type s = { type t }
+            let m = { type t = int } :> s
+            type u = m.t
+         *)
+        let m = np_str
+                  [ type_decl
+                      (constr ~pos:(pseudo_pos 20) "s" [])
+                      (str_sig ~pos:(pseudo_pos 21) [opaque_decl (constr ~pos:(pseudo_pos 22) "t" [])])
+                  ; let_bind
+                      (null_node "m")
+                      (Term { n = Seal
+                                    ( (np_str [type_decl
+                                                 (constr ~pos:(pseudo_pos 12) "t" [])
+                                                 (np_t_int)]
+                                      )
+                                    , te_named ~pos:(pseudo_pos 8)"s"
+                                    )
+                            ; pos = pseudo_pos 1
+                      })
+                  ; type_decl
+                      (np_constr "u" [])
+                      { n = TE_Path (np_te_named "m", { n = "t"; pos = pseudo_pos 2 })
+                      ; pos = pseudo_pos 3
+                      }
+
+                  ]
+        in
+        let res = elab_and_type (Fcm.Env.make ()) (Term m) in
+        assert_equal true (Result.is_ok res)
+      (* TODO:  check actual type coming back. *)
+      )
+  ; "Projection from an unbound signature, which should fail." >::
+      (fun _ ->
+        (*
+          This should fail because the existential from the signature is not
+          bound anywhere.
+
+          { type a = { type t }.t }
+         *)
+        let m =
+          np_str
+            [ type_decl
+                (np_constr "a" [])
+                { n = TE_Path
+                        ( np_str_sig [opaque_decl (np_constr "t" [])]
+                        , null_node "t"
+                        )
+                ; pos = null_pos
+                }
+            ]
+        in
+        let res = elab_and_type (Fcm.Env.make ()) (Term m) in
+        let _ = Result.map
+                  (fun (env, _) -> print_endline ([%derive.show: (ftyp node, kind) Fcm.Env.t] env))
+                  res
+        in
+        assert_equal true (Result.is_error res);
+        let expected = Invalid_type (tnamed "v_0") in
+        assert_equal expected (Result.get_error res) ~printer:[%derive.show: typing_error]
+      )
+
+  ]
 let suite =
   "Basic typing tests" >:::
     basic_module_tests
     @ sealing_tests
+    @ path_tests
     @ []
 
 let _ =
